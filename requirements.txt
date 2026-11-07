@@ -1,0 +1,7 @@
+openai-agents
+langgraph
+playwright
+llama-index
+chromadb
+python-dotenv
+rich

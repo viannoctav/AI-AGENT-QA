@@ -1,0 +1,14 @@
+{
+  "PRD": {
+    "path": "docs/PRD"
+  },
+  "TESTCASE": {
+    "path": "docs/TestCases"
+  },
+  "SOP": {
+    "path": "docs/SOP"
+  },
+  "EXCEL": {
+    "path": "docs/Excel"
+  }
+}

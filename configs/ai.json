@@ -1,0 +1,57 @@
+{
+  "ollama": {
+    "host": "http://127.0.0.1:11434",
+    "generation_model": "gemma4:e4b",
+    "embedding_model": "nomic-embed-text",
+    "planner_model": "qwen2.5:7b",
+    "evaluator_model": "qwen2.5:7b",
+    "judge_model": "qwen2.5:7b"
+  },
+  "rag": {
+    "vector_db_path": "knowledge/vector_db",
+    "prd_collection": "prd_knowledge_ollama",
+    "testcase_collection": "company_testcases_ollama",
+    "top_k": 5,
+    "chunk_size": 1800,
+    "chunk_overlap": 250
+  },
+  "learning": {
+    "feedback_limit": 20,
+    "retrieval_multiplier": 3,
+    "company_testcase_top_k": 5,
+    "retrieve_approved_generated": true,
+    "index_failed_generated": true
+  },
+  "embedding": {
+    "batch_size": 8
+  },
+  "test_case": {
+    "id_prefix": "TC",
+    "id_width": 3,
+    "title_prefix": "Verify",
+    "status_values": [
+      "BUG",
+      "PASSED",
+      "SKIP",
+      "PASSED WITH CONDITION",
+      "TBD"
+    ]
+  },
+  "v2": {
+    "judge_enabled": true,
+    "num_predict": 3000,
+    "temperature": 0.2,
+    "max_obligations": 250,
+    "max_attempts": 3,
+    "judge_batch": 5,
+    "dedup": true,
+    "dedup_threshold": 0.95,
+    "priority_rule": {
+      "Positive": "High",
+      "Negative": "Medium"
+    },
+    "generation_model": "gemma4:e4b",
+    "judge_model": "qwen2.5:7b",
+    "auto_model": "qwen2.5:14b"
+  }
+}

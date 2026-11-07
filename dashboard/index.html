@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI QA Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="nav" aria-label="Navigasi utama">
+    <div class="brand">
+      <strong>AI QA Generator</strong>
+      <span>Pembuat test case otomatis</span>
+    </div>
+    <div class="nav-links">
+      <a href="#beranda" data-view="beranda">Beranda</a>
+      <a href="#mulai" data-view="mulai">Mulai baru</a>
+      <a href="#berjalan" data-view="berjalan">Sedang berjalan<span id="nav-dot" class="nav-dot" hidden aria-label="sedang berjalan"></span></a>
+      <a href="#hasil" data-view="hasil">Hasil</a>
+      <a href="#cek" data-view="cek">Perlu dicek<span id="nav-badge" class="nav-badge" hidden></span></a>
+      <a href="#cakupan" data-view="cakupan">Cakupan</a>
+      <a href="#riwayat" data-view="riwayat">Riwayat</a>
+      <a href="#pengaturan" data-view="pengaturan">Pengaturan</a>
+    </div>
+    <div class="nav-status" aria-live="polite">
+      <strong id="nav-ai">Memeriksa AI lokal...</strong>
+      <span id="nav-ai-sub"></span>
+    </div>
+  </nav>
+  <main id="app" tabindex="-1">
+    <p class="loading">Memuat...</p>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

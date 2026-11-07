@@ -1,0 +1,14 @@
+{
+  "_comment": "Istilah dari domain LAIN (mis. dari contoh referensi) yang sering bocor ke test case. Istilah ini hanya ditolak bila TIDAK ada di PRD yang sedang dijalankan. Tambahkan sendiri bila menemukan kebocoran baru.",
+  "terms": [
+    "behavior monitoring",
+    "deep profiling",
+    "monitored target",
+    "monitored location",
+    "transaction tracking",
+    "customer profiling",
+    "behavior analysis",
+    "msisdn",
+    "nomor target"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "project": "AI-QA-Engineer",
+  "default_environment": "UAT",
+  "environments": {
+    "UAT": {
+      "base_url": "https://example.com",
+      "browser": "chromium",
+      "headless": false,
+      "timeout": 30000
+    },
+    "STAGING": {
+      "base_url": "https://www.saucedemo.com",
+      "browser": "chromium",
+      "headless": false,
+      "timeout": 30000
+    }
+  }
+}

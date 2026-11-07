@@ -1,0 +1,10 @@
+{
+  "default": "QA_FRAMEWORK",
+
+  "connections": {
+    "QA_FRAMEWORK": {
+      "type": "sqlite",
+      "path": "database/qa_framework.db"
+    }
+  }
+}
