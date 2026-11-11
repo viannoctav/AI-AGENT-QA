@@ -52,6 +52,7 @@
     },
     "generation_model": "gemma4:e4b",
     "judge_model": "qwen2.5:7b",
-    "auto_model": "qwen2.5:14b"
+    "auto_model": "",
+    "judge_timing": "akhir"
   }
 }

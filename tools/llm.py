@@ -11,7 +11,7 @@ _DEFAULTS: Dict[str, Any] = {
     "batch_size": 5, "max_attempts": 2, "judge_enabled": True, "generation_model": None,
     "judge_model": None, "num_predict": 3500, "temperature": 0.2, "judge_batch": 6,
     "max_obligations": None, "output_suffix": "_v2",
-    "dedup": True, "dedup_threshold": 0.95, "num_ctx": 8192, "think": False, "judge_scope": "auto", "auto_model": "", "auto_model_kinds": ["decision", "edge", "whitespace"],
+    "dedup": True, "dedup_threshold": 0.95, "num_ctx": 8192, "think": False, "judge_scope": "auto", "judge_timing": "akhir", "auto_model": "", "auto_model_kinds": ["decision", "edge", "whitespace"],
     "priority_rule": {"Positive": "High", "Negative": "Medium"},
 }
 
@@ -75,8 +75,16 @@ def judge_model() -> str:
 def _get_chat():
     if CHAT_FN is not None:
         return CHAT_FN
-    from ollama import chat  # import lambat agar modul bisa dites tanpa ollama
-    return chat
+    from ollama import Client  # import lambat agar modul bisa dites tanpa ollama
+    # batas waktu per panggilan: AI yang macet (atau koneksi putus) tidak menahan proses berjam-jam,
+    # panggilan dicoba ulang. Panggilan normal di laptop CPU 1-5 menit.
+    timeout = float(settings().get("call_timeout_sec") or 900)
+    host = ollama_settings().get("base_url") or ollama_settings().get("host") or None
+    try:
+        return Client(host=host, timeout=timeout).chat
+    except Exception:
+        from ollama import chat
+        return chat
 
 
 def _content(resp: Any) -> str:

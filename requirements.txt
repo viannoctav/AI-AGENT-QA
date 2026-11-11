@@ -1,7 +1,6 @@
-openai-agents
+# Komponen Python yang dibutuhkan Tera (dipasang otomatis oleh Jalankan_Tera.bat)
+ollama
 langgraph
-playwright
-llama-index
-chromadb
-python-dotenv
+openpyxl
+pandas
 rich

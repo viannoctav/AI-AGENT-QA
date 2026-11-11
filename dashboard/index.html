@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI QA Generator</title>
+<title>Tera — Asisten QA berbasis AI</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
@@ -12,21 +13,30 @@
 <div class="shell">
   <nav class="nav" aria-label="Navigasi utama">
     <div class="brand">
-      <strong>AI QA Generator</strong>
-      <span>Pembuat test case otomatis</span>
+      <img class="brand-mark" src="logo-mark.png" alt="" height="38">
+      <div><img class="brand-word" src="logo-word.png" alt="Tera" height="19"><span>Asisten QA berbasis AI</span></div>
     </div>
     <div class="nav-links">
       <a href="#beranda" data-view="beranda">Beranda</a>
-      <a href="#mulai" data-view="mulai">Mulai baru</a>
-      <a href="#berjalan" data-view="berjalan">Sedang berjalan<span id="nav-dot" class="nav-dot" hidden aria-label="sedang berjalan"></span></a>
-      <a href="#hasil" data-view="hasil">Hasil</a>
-      <a href="#cek" data-view="cek">Perlu dicek<span id="nav-badge" class="nav-badge" hidden></span></a>
-      <a href="#cakupan" data-view="cakupan">Cakupan</a>
+      <div class="nav-group" role="group" aria-labelledby="ng-konversi">
+        <span class="nav-group-title" id="ng-konversi">Konversi Dokumen</span>
+        <a class="sub" href="#catatan" data-view="catatan"><span>Catatan Konversi ke PRD</span></a>
+      </div>
+      <div class="nav-group" role="group" aria-labelledby="ng-gen">
+        <span class="nav-group-title" id="ng-gen">Generator Test Case PRD</span>
+        <a class="sub" href="#mulai" data-view="mulai">Mulai baru</a>
+        <a class="sub" href="#berjalan" data-view="berjalan">Sedang berjalan<span id="nav-dot" class="nav-dot" hidden aria-label="sedang berjalan"></span></a>
+        <a class="sub" href="#hasil" data-view="hasil">Hasil</a>
+        <a class="sub" href="#cek" data-view="cek">Perlu dicek<span id="nav-badge" class="nav-dot nav-dot-warn" hidden aria-label="ada hasil baru yang perlu dicek" title="Ada hasil baru yang perlu dicek"></span></a>
+        <a class="sub" href="#cakupan" data-view="cakupan">Cakupan</a>
+      </div>
       <a href="#riwayat" data-view="riwayat">Riwayat</a>
+    </div>
+    <div class="nav-links nav-bottom">
       <a href="#pengaturan" data-view="pengaturan">Pengaturan</a>
     </div>
-    <div class="nav-status" aria-live="polite">
-      <strong id="nav-ai">Memeriksa AI lokal...</strong>
+    <div class="nav-status" aria-live="polite" hidden>
+      <strong id="nav-ai"></strong>
       <span id="nav-ai-sub"></span>
     </div>
   </nav>

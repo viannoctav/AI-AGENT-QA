@@ -53,16 +53,43 @@ FAULT_ONCE = set()
 def fake_chat(model, messages, format=None, options=None):
     system, prompt = messages[0]["content"], messages[1]["content"]
     models[(model, "judge" if "auditor" in system else "expand")] = models.get((model, "judge" if "auditor" in system else "expand"), 0) + 1
+    if "Kondisi decision table:" in prompt:  # analisis decision table (nilai, nilai normal, nilai yang pasti ditolak)
+        out = []
+        found = re.findall(r"^- \[([^\]]*)\] ([^:\n]+): (.+)$", prompt, re.M)
+        if len({t for t, _, _ in found}) > 1:  # jawaban sebagian (seperti AI asli): tabel pertama terlewat
+            found = [f for f in found if f[0] != found[0][0]]
+        for table, name, vals in found:
+            name = name.replace("(", "").replace(")", "") if "(" in name else name  # nama sedikit berbeda
+            v = [f"{name} normal", f"{name} gagal"] if "belum ada" in vals else [x.strip() for x in vals.split(" / ")]
+            rej = [x for x in v if re.match(r"(?i)^(invalid|expired|revoked|locked|already used)", x)]
+            prev = next((o for o in reversed(out) if o["table"] == table), None)
+            dep = {"name": prev["name"], "values": [prev["values"][0]]} if prev and len(prev["values"]) > 1 else None
+            out.append({"table": table, "name": name, "values": v, "normal": v[0], "reject": rej, "berlaku_jika": dep})
+        return {"message": {"content": json.dumps({"conditions": out})}}
+    if "Cocokkan label" in system:  # penyeragaman nama field Test Data
+        return {"message": {"content": json.dumps({"map": {}})}}
+    if "Satu baris decision table" in prompt:  # hasil satu baris decision table
+        combo = prompt.split("Satu baris decision table", 1)[1]
+        bad = re.search(r"(?i)gagal|expired|invalid|FAILED", combo)
+        r = random.random()
+        if r < 0.1:
+            return {"message": {"content": json.dumps({"langkah": [], "keputusan": "DIPROSES", "expected": "Express shipping is always chargeable"})}}
+        if r < 0.15:
+            return {"message": {"content": "bukan json"}}
+        return {"message": {"content": json.dumps({"langkah": ["aturan berlaku"], "keputusan": "DITOLAK" if bad else "DIPROSES",
+                                                    "expected": "Sistem memproses sesuai kombinasi kondisi pada baris ini"})}}
     if "auditor" in system:
         calls["judge"] += 1
-        res = []
-        for oid in re.findall(r"^### (OB-\d+)", prompt, re.M):
-            r = random.random()
-            if r < 0.10: res.append({"ob_id": oid, "verdict": "UNSURE", "reason": "informasi PRD kurang jelas"})
-            elif r < 0.25: res.append({"ob_id": oid, "verdict": "CONTRADICTS", "reason": "TC允许第4次尝试 与PRD矛盾"})
-            elif r < 0.35: res.append({"ob_id": oid, "verdict": "CONTRADICTS", "reason": "Expected berlawanan dengan aturan"})
-            else: res.append({"ob_id": oid, "verdict": "CONSISTENT", "reason": ""})
-        return {"message": {"content": json.dumps({"results": res})}}
+        exp = re.search(r"^TC expected: (.*)$", prompt, re.M).group(1)
+        r = random.random()
+        if r < 0.08: res = {"keputusan_sistem": "TIDAK JELAS", "relevan": True, "salah_fakta": "", "aturan": "", "reason": "informasi PRD kurang jelas"}
+        elif r < 0.15: res = {"keputusan_sistem": "DIPROSES", "relevan": True, "salah_fakta": "", "aturan": "x", "reason": "TC允许第4次尝试 与PRD矛盾"}
+        elif r < 0.22: res = {"keputusan_sistem": "DITOLAK", "relevan": True, "salah_fakta": exp[:30], "aturan": "aturan PRD", "reason": "nilai salah"}
+        elif r < 0.28: res = {"keputusan_sistem": "DITOLAK", "relevan": True, "salah_fakta": "tidak menyebut pesan error", "aturan": "", "reason": "kurang detail"}
+        elif r < 0.32: res = {"keputusan_sistem": "DIPROSES", "relevan": False, "salah_fakta": "", "aturan": "", "reason": "menguji hal lain"}
+        else: res = {"keputusan_sistem": "DIPROSES" if exp.lower().startswith("berhasil") else "DITOLAK", "relevan": True,
+                     "salah_fakta": "", "aturan": "aturan PRD", "reason": "sesuai"}
+        return {"message": {"content": json.dumps(res)}}
     calls["expand"] += 1
     out = []
     for blk in re.split(r"(?m)^### ", prompt)[1:]:

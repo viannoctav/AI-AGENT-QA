@@ -21,11 +21,6 @@ _LEAK = re.compile(r"\s*\|\s*(expected(\s+result)?|hasil\s+yang\s+diharapkan)\s*
 _COMBO = re.compile(r"\s*[\(\[]\s*kombinasi\s*#?\s*\d+\s*[\)\]]\s*$|\s+kombinasi\s*#?\s*\d+\s*$", re.I)
 _TRAIL_NUM = re.compile(r"(?<=[^\d\s#])\s+#?(\d{1,4})\s*$")
 
-_LABELS = {
-    "email": "Email", "password": "Password", "new_password": "Password baru", "old_password": "Password lama",
-    "phone": "Nomor telepon", "phone_number": "Nomor telepon", "identifier": "Identifier", "otp": "Kode OTP",
-    "otp_code": "Kode OTP", "totp": "Kode TOTP", "token": "Token", "code": "Kode",
-}
 
 # kata benda yang pasti berperan sebagai SUBJEK bila langsung mengikuti "Berhasil" ("Berhasil token akses ...")
 _BERHASIL_SUBJ = {
@@ -61,7 +56,9 @@ def format_test_data(value: Any) -> str:
     if isinstance(data, dict):
         lines = []
         for k, v in data.items():
-            label = _LABELS.get(str(k).lower()) or str(k).replace("_", " ").strip().capitalize()
+            # nama kunci apa adanya; penyamaan dengan nama field PRD dilakukan di tahap coverage (unify_field_labels)
+            label = str(k).replace("_", " ").strip()
+            label = label[:1].upper() + label[1:]
             lines.append(f"{label}: {format_test_data(v) if isinstance(v, (dict, list)) else v}")
         return "\n".join(lines)
     if isinstance(data, list):

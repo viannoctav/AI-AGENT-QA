@@ -1,4 +1,4 @@
-/* Dashboard lokal AI QA Generator - semua layar dalam satu file.
+/* Dashboard lokal Tera (Asisten QA berbasis AI) - semua layar dalam satu file.
    Data diambil dari dashboard.py lewat /api/...; progres live lewat Server-Sent Events. */
 "use strict";
 
@@ -56,7 +56,9 @@ function fmtDur(sec) {
   return r ? `${h} jam ${r} menit` : `${h} jam`;
 }
 
-const runDur = (r) => (r && r.started && r.finished ? r.finished - r.started : null);
+// lama proses = waktu kerja; jeda saat laptop tidur (lebih dari 15 menit tanpa kabar) tidak dihitung
+const runDur = (r) => (r && typeof r.active_sec === "number" ? r.active_sec : r && r.started && r.finished ? r.finished - r.started : null);
+const pausedNote = (r) => (r && r.paused_sec >= 900 ? ` (tidak termasuk ${fmtDur(r.paused_sec)} saat laptop tidur/terhenti)` : "");
 const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
 
 function icon(kind) {
@@ -104,6 +106,7 @@ function explainFlag(part) {
   if (/^Diturunkan otomatis/.test(p)) return ["status", "Perpindahan status ini tidak disebut di PRD dan dianggap tidak boleh"];
   if (/N\/A/.test(p)) return ["kondisi", "Sebagian kondisi tidak berlaku (N/A) karena bergantung pada kondisi lain"];
   if (/pemicu/i.test(p)) return ["kondisi", "PRD tidak menyebut pemicu perpindahan status"];
+  if (/di Test Steps tidak ada di PRD/.test(p)) return ["jelas", "Ada angka di Test Steps yang tidak tercantum di PRD"];
   if (/PERLU REVIEW/.test(p)) {
     if (/generik/.test(p)) return ["jelas", "Kalimat hasil yang diharapkan terlalu umum"];
     if (/terpotong/.test(p)) return ["jelas", "Kalimat hasil yang diharapkan terpotong"];
@@ -147,6 +150,7 @@ function humanLog(tag, msg) {
   msg = String(msg || "");
   if (tag === "verifier" && (m = msg.match(/^(\d+) TC dikembalikan/))) return [`${m[1]} test case ditulis ulang karena belum lolos pemeriksaan`, ""];
   if (tag === "verifier" && /tidak menghasilkan TC/.test(msg)) return ["1 skenario gagal dibuatkan test case (tercatat di Perlu dicek)", "err"];
+  if (tag === "judge" && (m = msg.match(/diperiksa (\d+)\/(\d+)/))) return [`AI pemeriksa: ${m[1]} dari ${m[2]} test case sudah diperiksa ulang`, ""];
   if (tag === "judge") return ["1 test case ditandai Perlu dicek karena AI pemeriksa ragu", "warn"];
   if (tag === "designer" && (m = msg.match(/max_obligations=(\d+) dari (\d+)/))) return [`Jumlah skenario dibatasi ${m[1]} dari ${m[2]}`, "warn"];
   if (tag === "designer" && (m = msg.match(/^obligations=(\d+)/))) return [`${m[1]} skenario uji disusun`, ""];
@@ -155,6 +159,7 @@ function humanLog(tag, msg) {
   if (tag === "atomizer" && (m = msg.match(/atoms=(\d+)/))) return [`PRD dibaca: ${m[1]} aturan ditemukan`, ""];
   if (tag === "expander" && (m = msg.match(/draft (\d+)\/(\d+)/))) return [`AI baru mengembalikan ${m[1]} dari ${m[2]} test case, sisanya diminta ulang`, ""];
   if (tag === "coverage") return ["Hasil dirapikan: test case kembar digabung dan prioritas diisi", ""];
+  if (tag === "export" && /menyalin/.test(msg)) return ["Excel tidak bisa disalin ke folder outputs karena file lamanya sedang dibuka. Unduh dari halaman Hasil.", "warn"];
   if (tag === "export") return /gagal/.test(msg) ? ["Gagal menyimpan data lengkap (JSON)", "err"] : ["Hasil disimpan ke Excel", ""];
   if (tag === "llm") return ["Gagal menghubungi AI lokal, mencoba lagi", "err"];
   return [msg, ""];
@@ -199,8 +204,12 @@ function reduce(L, e) {
     case "batch_start": L.batch = { n: (e.ids || []).length, attempt: e.attempt }; break;
     case "progress":
       Object.assign(L, { done: e.done, total: e.total || L.total, retry: e.retry, dropped: e.dropped, judged: e.judged, sources: e.sources || {} });
+      L.eta = typeof e.eta === "number" ? e.eta : null;
+      L.etaAt = e.time;
       break;
     case "log": {
+      if (typeof e.eta === "number") { L.eta = e.eta; L.etaAt = e.time; }
+      if (e.tag === "designer" && /judge_planned=/.test(e.msg || "")) break; // catatan internal untuk perkiraan waktu
       const [text, cls] = humanLog(e.tag, e.msg);
       L.logs.unshift({ time: e.time, text, cls });
       if (L.logs.length > 200) L.logs.pop();
@@ -214,24 +223,40 @@ function reduce(L, e) {
 }
 
 /* ================================================================= menu samping */
+const SEEN_KEY = "aiqa-cek-dilihat";
+function seenReview() { try { return localStorage.getItem(SEEN_KEY); } catch (e) { return S.seenMem || null; } }
+function markReviewSeen(runId) {
+  S.seenMem = runId;
+  try { localStorage.setItem(SEEN_KEY, runId); } catch (e) { /* mode privat: cukup di memori */ }
+  const b = document.getElementById("nav-badge");
+  if (b && S.overview && S.overview.last && S.overview.last.id === runId) b.hidden = true;
+}
+
 async function refreshNav() {
   try {
     S.overview = await api("/api/overview");
   } catch (e) {
-    document.getElementById("nav-ai").textContent = "Server dashboard tidak menjawab";
-    document.getElementById("nav-ai-sub").textContent = "Pastikan jendela PowerShell dashboard masih terbuka";
+    setNavStatus("Tera tidak terhubung", "Jendela PowerShell Tera harus tetap terbuka");
     return;
   }
   const o = S.overview, pf = o.preflight;
   document.getElementById("nav-dot").hidden = !o.active;
+  // titik di menu Perlu dicek: hanya untuk hasil terbaru yang belum dibuka halamannya
   const badge = document.getElementById("nav-badge");
-  const nr = o.last && o.last.report ? o.last.report.needs_review : null;
-  badge.hidden = !nr;
-  badge.textContent = nr || "";
-  const ok = pf.models.filter((m) => m.ok).length;
-  document.getElementById("nav-ai").textContent = pf.ollama ? "AI lokal menyala" : "AI lokal belum menyala";
-  document.getElementById("nav-ai-sub").textContent = !pf.ollama ? "Buka aplikasi Ollama"
-    : pf.missing.length ? `${pf.missing.length} model belum terpasang` : `${ok} model AI siap dipakai`;
+  const nr = o.last && o.last.report ? o.last.report.needs_review : 0;
+  badge.hidden = !(nr && o.last.id !== seenReview());
+  // kotak status hanya muncul bila ada masalah; saat semuanya siap, sidebar bersih
+  if (!pf.ollama) setNavStatus("AI belum aktif", "Buka aplikasi Ollama dulu");
+  else if (pf.missing.length) setNavStatus("AI belum lengkap", "Cek menu Pengaturan");
+  else setNavStatus(null);
+}
+
+function setNavStatus(title, sub) {
+  const box = document.querySelector(".nav-status");
+  if (!box) return;
+  box.hidden = !title;
+  document.getElementById("nav-ai").textContent = title || "";
+  document.getElementById("nav-ai-sub").textContent = sub || "";
 }
 
 function setActiveNav(view) {
@@ -249,13 +274,13 @@ async function viewBeranda() {
   if (act) {
     const p = act.progress || {}, total = p.total || 0, done = p.done || 0;
     const el = Date.now() / 1000 - (act.started || Date.now() / 1000);
-    const eta = done >= 3 && total ? ((total - done) * el) / done : null;
+    const eta = typeof p.eta === "number" ? Math.max(60, p.eta - (Date.now() / 1000 - (p.eta_at || Date.now() / 1000))) : null;
     active = `<p>${esc(act.prd_title)}</p>
       <div style="display:flex;flex-direction:column;gap:8px">
         <span class="bar" style="height:10px"><span style="width:${pct(done, total)}%"></span></span>
         <div class="small muted num" style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px">
           <span>${total ? `${num(done)} dari ${num(total)} skenario selesai` : "Sedang menyiapkan skenario"}</span>
-          <span>${eta !== null ? `kira-kira ${fmtDur(eta)} lagi` : `sudah berjalan ${fmtDur(el)}`}</span></div></div>
+          <span>${eta !== null ? `kira-kira ${fmtDur(eta)} lagi` : `sudah berjalan ${fmtDur(el)}, menghitung perkiraan waktu`}</span></div></div>
       <a href="#berjalan" style="margin-top:auto;font-weight:500">Lihat progresnya</a>`;
   } else {
     active = `<p class="muted">Tidak ada proses yang berjalan.</p>
@@ -297,7 +322,7 @@ async function viewBeranda() {
 
   app.innerHTML = `
   <header class="page-head"><div>
-      <h1>Selamat datang di AI QA Generator</h1>
+      <h1>Selamat datang di Tera</h1>
       <p class="muted">Ubah dokumen PRD menjadi test case siap pakai, langsung di laptop ini.</p></div>
     <div class="actions">${last ? `<a class="btn" href="#hasil/${esc(last.id)}">Lihat hasil terakhir</a>` : ""}
       <a class="btn btn-primary" href="#mulai">Mulai buat test case</a></div></header>
@@ -342,18 +367,13 @@ async function viewMulai() {
   ${pf.active_run ? `<div class="banner" role="status"><span><strong>Masih ada proses yang berjalan.</strong> Proses baru bisa dimulai setelah itu selesai atau dihentikan.</span><a href="#berjalan">Lihat progresnya</a></div>` : ""}
   <div class="grid grid-2">
     <section class="card" aria-labelledby="prd-title">
-      <h2 id="prd-title">Dokumen dan pilihan</h2>
-      <fieldset><legend>Dokumen PRD</legend>
-        ${prds.length ? prds.map((p) => `<label class="radio-card"><input type="radio" name="prd" value="${esc(p.file)}" ${p.file === chosen ? "checked" : ""}>
-          <span>${esc(p.title)} <span class="tiny muted">${esc(p.file)}</span></span></label>`).join("") : `<p class="muted">Belum ada dokumen.</p>`}
-        <div><button type="button" class="btn" data-action="upload">Tambah dokumen PRD</button>
-          <input type="file" id="prd-file" accept=".md" hidden></div>
-      </fieldset>
-      <label class="field" for="cap">Jumlah skenario (opsional)
-        <input id="cap" type="number" min="1" placeholder="Kosongkan untuk semua" style="max-width:260px">
-        <span class="hint">Isi angka kecil, misalnya 30, untuk percobaan cepat.</span></label>
-      <label class="check"><input type="checkbox" id="no-judge"><span>Lewati pemeriksaan AI kedua<br>
-        <span class="hint">Lebih cepat, tetapi test case yang meragukan tidak diperiksa ulang.</span></span></label>
+      <h2 id="prd-title">Dokumen</h2>
+      <label class="field" for="prd-select">Dokumen PRD
+        ${prds.length ? `<select id="prd-select" name="prd">${prds.map((p) => `<option value="${esc(p.file)}" ${p.file === chosen ? "selected" : ""}>${esc(p.title)}</option>`).join("")}</select>
+          <span class="hint" id="prd-file-name">File: ${esc(chosen || "")}</span>` : `<span class="muted">Belum ada dokumen.</span>`}
+      </label>
+      <div><button type="button" class="btn" data-action="upload">Tambah dokumen PRD</button>
+        <input type="file" id="prd-file" accept=".md" hidden></div>
       <div class="actions" style="padding-top:4px">
         <button type="button" class="btn btn-primary" data-action="start" ${pf.ready ? "" : "disabled"}>Mulai buat test case</button>
         <span class="small muted" id="estimate">${esc(chosen ? estimate(chosen) : "")}</span></div>
@@ -364,6 +384,25 @@ async function viewMulai() {
       <ul class="ready-list">${rows.map(([k, t, s]) => `<li>${icon(k)}<span><span style="font-weight:500">${esc(t)}</span>${s ? `<br><span class="tiny muted">${esc(s)}</span>` : ""}</span></li>`).join("")}</ul>
     </section>
   </div>`;
+}
+
+async function recheck(btn) {
+  // tampilkan bahwa pemeriksaan sedang berjalan; minimal 0,6 detik supaya terlihat walau server cepat
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner" aria-hidden="true"></span>Memeriksa...`;
+  const list = document.querySelector(".ready-list");
+  if (list) list.classList.add("checking");
+  try {
+    await Promise.all([api("/api/preflight"), new Promise((r) => setTimeout(r, 600))]);
+    await viewMulai();
+    refreshNav();
+    toast("Kesiapan sudah diperiksa ulang");
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = "Periksa ulang";
+    if (list) list.classList.remove("checking");
+  }
 }
 
 async function uploadPrd(file) {
@@ -379,20 +418,132 @@ async function uploadPrd(file) {
 }
 
 async function startRun() {
-  const prd = (document.querySelector('input[name="prd"]:checked') || {}).value;
+  const prd = (document.getElementById("prd-select") || {}).value;
   if (!prd) return toast("Pilih dokumen PRD dulu", true);
-  const cap = document.getElementById("cap").value.trim();
   const btn = document.querySelector('[data-action="start"]');
   btn.disabled = true;
   btn.textContent = "Memulai...";
   try {
-    await api("/api/runs", { method: "POST", body: { prd, cap: cap ? Number(cap) : null, no_judge: document.getElementById("no-judge").checked } });
+    await api("/api/runs", { method: "POST", body: { prd } });
     location.hash = "#berjalan";
   } catch (e) {
     toast(e.message, true);
     btn.disabled = false;
     btn.textContent = "Mulai buat test case";
   }
+}
+
+/* ================================================================= CATATAN QA -> PRD */
+function stopNotesTimer() {
+  if (S.notesTimer) { clearInterval(S.notesTimer); S.notesTimer = null; }
+}
+
+async function viewCatatan() {
+  const n = await api("/api/notes");
+  const running = n.status === "berjalan";
+  const res = n.status === "selesai" ? n.result : null;
+  const draft = S.notesDraft || { name: "", text: "" };
+  const log = (n.log || []).map((l) => `<li><time>${esc(new Date(l.time * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }))}</time>${esc(l.msg)}</li>`).join("");
+  app.innerHTML = `
+  <header class="page-head"><div><p class="tiny muted">Konversi Dokumen</p><h1>Catatan Konversi ke PRD</h1>
+    <p class="muted">Tempel catatan QA (bebas, boleh campur Indonesia dan Inggris). AI hanya merapikan isi catatan menjadi PRD: setiap aturan wajib punya kutipan asli dari catatan. Hal yang diragukan tidak dimasukkan ke PRD, melainkan ke catatan review terpisah yang bisa diunduh.</p></div></header>
+  ${n.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Penyusunan gagal.</strong> ${esc(n.error || "")}</span></div>` : ""}
+  <div class="grid grid-2">
+    <section class="card" aria-labelledby="nt-title">
+      <h2 id="nt-title">Catatan</h2>
+      <label class="field" for="nt-name">Nama modul
+        <input id="nt-name" type="text" maxlength="80" placeholder="mis. Berita Acara" value="${esc(draft.name)}" ${running ? "disabled" : ""}>
+        <span class="hint">Dipakai sebagai Module di test case dan nama file PRD.</span></label>
+      <label class="field" for="nt-text">Isi catatan
+        <textarea id="nt-text" class="notes" ${running ? "disabled" : ""} placeholder="Tempel catatan QA di sini...">${esc(draft.text)}</textarea></label>
+      <div class="actions"><button type="button" class="btn btn-primary" data-action="notes-start" ${running ? "disabled" : ""}>${running ? "Sedang disusun..." : "Susun PRD"}</button>
+        <span class="small muted">Biasanya beberapa menit, tergantung panjang catatan.</span></div>
+    </section>
+    <section class="log" aria-labelledby="nt-log">
+      <h2 id="nt-log">Progres</h2>
+      <ul class="log-lines" aria-live="polite">${log || `<li>Belum ada proses.</li>`}</ul>
+    </section>
+  </div>
+  ${res ? notesResult(res) : ""}`;
+  stopNotesTimer();
+  if (running) S.notesTimer = setInterval(async () => {
+    if (!location.hash.startsWith("#catatan")) return stopNotesTimer();
+    const m = await api("/api/notes").catch(() => null);
+    if (m && m.status !== "berjalan") { stopNotesTimer(); S.notesEdited = null; viewCatatan(); }
+    else if (m) { const ul = document.querySelector(".log-lines"); if (ul) ul.innerHTML = (m.log || []).map((l) => `<li><time>${esc(new Date(l.time * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }))}</time>${esc(l.msg)}</li>`).join(""); }
+  }, 3000);
+}
+
+function notesResult(r) {
+  const qs = r.questions || [];
+  const conflict = qs.filter((q) => q.jenis === "bertentangan").length;
+  const qItem = (q) => `<li>${q.jenis === "bertentangan" ? `<span class="chip">Bertentangan</span> ` : ""}${esc(q.pertanyaan)}${q.fitur ? ` <span class="tiny muted">(${esc(q.fitur)})</span>` : ""}${q.kutipan ? `<br><span class="quote">Catatan: “${esc(q.kutipan)}”</span>` : ""}</li>`;
+  return `
+  <section class="card" aria-labelledby="nr-title" style="margin-top:16px">
+    <div class="card-head"><h2 id="nr-title">Hasil: ${esc(r.prd_file)}</h2>
+      <span class="small muted">${num(r.features)} fitur, ${num(r.rules)} aturan; catatan review: ${num(qs.length)} pertanyaan${conflict ? ` (${conflict} bertentangan)` : ""}</span></div>
+    <p class="small muted">PRD ini sudah tersimpan dan muncul di daftar dokumen pada Mulai baru. PRD hanya berisi aturan dari catatan; hal yang diragukan ada di catatan review terpisah.</p>
+    <div class="card-head" style="margin-top:8px"><h3>Catatan review (terpisah dari PRD)</h3>
+      <a class="btn btn-small" href="/api/conversions/${encodeURIComponent(r.id)}/review" download="${esc(r.review_file || "catatan_review.pdf")}">Unduh catatan review (PDF)</a></div>
+    <p class="small muted">Berisi hal yang bertentangan atau belum jelas untuk ditanyakan ke tim, isian AI yang ditolak, baris catatan yang belum masuk, dan asal setiap aturan. Tidak dipakai untuk membuat test case.</p>
+    ${qs.length ? `<ol class="qlist">${qs.map(qItem).join("")}</ol>` : `<p class="small muted">Tidak ada pertanyaan terbuka.</p>`}
+    ${(r.missed_lines || []).length ? `<details class="fold"><summary>Baris catatan yang belum masuk PRD (${r.missed_lines.length})</summary>
+      <ul class="qlist">${r.missed_lines.map((m) => `<li>Baris ${m.baris}: “${esc(m.teks)}”</li>`).join("")}</ul></details>` : ""}
+    ${(r.rejected || []).length ? `<details class="fold"><summary>Isian AI yang ditolak penjaga anti-karangan (${r.rejected.length})</summary>
+      <ul class="qlist">${r.rejected.map((x) => `<li>${esc(x.pernyataan || "-")}<br><span class="quote">${esc(x.alasan || "")}</span></li>`).join("")}</ul></details>` : ""}
+    <label class="field" for="nr-md" style="margin-top:12px">Isi PRD (boleh diedit)
+      <textarea id="nr-md" class="notes tall">${esc(S.notesEdited ?? r.markdown)}</textarea></label>
+    <div class="actions">
+      <button type="button" class="btn" data-action="notes-save" data-file="${esc(r.prd_file)}">Simpan perubahan</button>
+      <button type="button" class="btn btn-primary" data-action="notes-use" data-file="${esc(r.prd_file)}">Buat test case dari PRD ini</button>
+    </div>
+    <div class="actions" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--line-soft)">
+      <button type="button" class="btn" data-action="notes-reset">Mulai ulang (konversi baru)</button>
+      <button type="button" class="btn" data-action="conv-delete" data-conv="${esc(r.id)}">Hapus hasil ini</button>
+      <span class="small muted">Mulai ulang mengosongkan halaman ini, hasilnya tetap tersimpan di Riwayat. Hapus membuang PRD dan catatan review ini.</span>
+    </div>
+  </section>`;
+}
+
+async function notesStart() {
+  const name = document.getElementById("nt-name").value.trim();
+  const text = document.getElementById("nt-text").value;
+  S.notesDraft = { name, text };
+  if (!name) return toast("Isi nama modul dulu", true);
+  if (text.trim().length < 20) return toast("Tempel catatan QA dulu", true);
+  try {
+    S.notesEdited = null;
+    await api("/api/notes", { method: "POST", body: { name, text } });
+    viewCatatan();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function notesReset() {
+  try {
+    await api("/api/notes/reset", { method: "POST" });
+    S.notesDraft = { name: "", text: "" };
+    S.notesEdited = null;
+    viewCatatan();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function convDelete(id, fromHistory) {
+  if (!confirm("Hapus hasil konversi ini? PRD dan catatan review-nya ikut terhapus dan tidak bisa dikembalikan.")) return;
+  try {
+    await api(`/api/conversions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    toast("Hasil konversi dihapus");
+    if (!fromHistory) { S.notesDraft = { name: "", text: "" }; S.notesEdited = null; }
+    route();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function notesSave(file, thenUse) {
+  const ta = document.getElementById("nr-md");
+  try {
+    await api(`/api/prds/${encodeURIComponent(file)}`, { method: "PUT", body: { content: ta.value } });
+    S.notesEdited = ta.value;
+    if (thenUse) { S.mulaiPrd = file; location.hash = "#mulai"; } else toast("PRD disimpan");
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ================================================================= SEDANG BERJALAN */
@@ -454,7 +605,8 @@ function renderLive() {
   const started = run.started || L.firstTime;
   const el = started ? Date.now() / 1000 - started : 0;
   const finished = L.status !== "berjalan";
-  const eta = !finished && L.done >= 3 && L.total ? ((L.total - L.done) * el) / L.done : null;
+  // perkiraan dari server: kecepatan kelompok terakhir, dikurangi waktu sejak perkiraan dibuat
+  const eta = !finished && typeof L.eta === "number" ? Math.max(60, L.eta - (Date.now() / 1000 - (L.etaAt || Date.now() / 1000))) : null;
   const src = L.sources || {};
   const maxA = (S.config && S.config.max_attempts) || 3;
   const models = run.models || {};
@@ -474,7 +626,7 @@ function renderLive() {
   <section class="card" aria-labelledby="progress-title" style="gap:24px">
     <div class="big-progress">
       <h2 id="progress-title"><b>${num(L.done)}</b><span>dari ${L.total ? num(L.total) : "..."} skenario uji selesai</span></h2>
-      <p class="muted num">${finished ? `Lama proses ${esc(fmtDur(el))}` : `Sudah berjalan ${esc(fmtDur(el))}${eta !== null ? `, kira-kira ${esc(fmtDur(eta))} lagi` : ""}`}</p></div>
+      <p class="muted num">${finished ? `Lama proses ${esc(fmtDur(runDur(run) || el))}${esc(pausedNote(run))}` : `Sudah berjalan ${esc(fmtDur(el))}${eta !== null ? `, kira-kira ${esc(fmtDur(eta))} lagi` : ", menghitung perkiraan waktu"}`}</p></div>
     <ol class="stages" aria-label="Tahapan">
       ${STAGES.map(([k, label]) => {
         const st = L.stages[k];
@@ -483,7 +635,7 @@ function renderLive() {
       }).join("")}
     </ol>
     ${!finished && L.batch && L.stages.generate.state === "running" ? `<div class="now"><span style="font-weight:600">Sedang ditulis</span><span>${num(L.batch.n)} skenario, percobaan ${num(L.batch.attempt)} dari ${num(maxA)}</span></div>` : ""}
-    ${finished ? "" : `<p class="small muted">Browser boleh ditutup. Proses tetap jalan selama jendela PowerShell dashboard tidak ditutup.</p>`}
+    ${finished ? "" : `<p class="small muted">Browser boleh ditutup. Proses tetap jalan selama jendela PowerShell dashboard tidak ditutup.${run.keep_awake ? " Laptop tidak akan tidur otomatis selama proses berjalan, tapi jangan tutup layar laptop atau pilih Sleep." : ""}</p>`}
   </section>
   <div class="grid grid-2">
     <section class="card" aria-labelledby="stat-title">
@@ -613,7 +765,8 @@ async function viewHasil(runId, focus) {
 }
 
 // Sub Module/Menu = fitur yang diuji; hasil lama (sebelum kolom ini diubah) jatuh ke Module/Menu
-const feat = (t) => (t.sub_label && t.sub_label !== "-" && !/^(Decision Table|Edge Case|Alur Utama|Aturan Bisnis)$/.test(t.sub_label) ? t.sub_label : t.module);
+const OLD_SUB = new Set(["Alur Utama", "Ambang Percobaan", "Aturan Bisnis", "Batas Jumlah Percobaan", "Batas Panjang", "Batas Panjang Maksimum", "Batas Panjang Minimum", "Decision Table", "Durasi Penguncian", "Edge Case", "Field Wajib", "Format Data", "Kelengkapan", "Keunikan Data", "Komposisi Karakter", "Masa Berlaku", "Panjang Tepat", "Performa", "Sekali Pakai", "Spasi Awal/Akhir", "Toleransi Waktu", "Transisi State", "Transisi Tidak Valid"]); // label jenis aturan di hasil lama, bukan nama fitur
+const feat = (t) => (t.sub_label && t.sub_label !== "-" && !OLD_SUB.has(t.sub_label) ? t.sub_label : t.module);
 
 function filteredTcs() {
   const H = S.hasil, f = H.filters, q = f.q.trim().toLowerCase();
@@ -681,6 +834,7 @@ async function viewCek(runId) {
   if (!H) return noRunYet("Perlu dicek");
   const run = H.run;
   const rv = await api(`/api/runs/${encodeURIComponent(run.id)}/review`);
+  markReviewSeen(run.id);
   const groups = Object.fromEntries(GROUPS.map((g) => [g.key, []]));
   rv.tcs.forEach((t) => {
     const parts = flagInfo(t.review_flag);
@@ -732,24 +886,39 @@ async function viewCek(runId) {
 
 /* ================================================================= RIWAYAT */
 async function viewRiwayat() {
-  const runs = await api("/api/runs");
+  const [runs, convs] = await Promise.all([api("/api/runs"), api("/api/conversions").catch(() => [])]);
   S.runsCache = runs;
   S.compare = new Set([...S.compare].filter((id) => runs.some((r) => r.id === id)));
+  const rows = [
+    ...runs.map((r) => ({ kind: "tc", t: r.finished || r.started || 0, r })),
+    ...convs.map((c) => ({ kind: "conv", t: c.time || 0, c })),
+  ].sort((x, y) => y.t - x.t);
+  const tcRow = (r) => { const rep = r.report || {}; return `<tr>
+    <td><input type="checkbox" data-action="pick-run" data-run="${esc(r.id)}" ${S.compare.has(r.id) ? "checked" : ""} aria-label="Pilih proses ${esc(fmtDate(r.finished || r.started))} untuk dibandingkan"></td>
+    <td class="num nw">${esc(fmtDate(r.finished || r.started))}</td><td class="nw"><span class="chip brand">Test case PRD</span></td><td>${esc(r.prd_title)}</td>
+    <td>${num(rep.test_cases)} test case, ${num(rep.needs_review)} perlu dicek</td>
+    <td class="r">${esc(fmtDur(runDur(r)))}</td><td>${statusChip(r.status)}</td>
+    <td><span class="actions">${r.status === "selesai" ? `<a class="btn btn-small" href="#hasil/${esc(r.id)}">Lihat hasil</a>` : r.status === "berjalan" ? `<a class="btn btn-small" href="#berjalan">Lihat progres</a>` : ""}
+      ${r.status !== "berjalan" ? `<button type="button" class="btn btn-small" data-action="delete-run" data-run="${esc(r.id)}">Hapus</button>` : ""}</span></td></tr>`; };
+  const convRow = (c) => `<tr>
+    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip grey">Konversi catatan</span></td><td>${esc(c.module || c.prd_file)}</td>
+    <td>${num(c.features)} fitur, ${num(c.rules)} aturan, ${num(c.questions)} pertanyaan${c.conflicts ? ` (${num(c.conflicts)} bertentangan)` : ""}</td>
+    <td class="r">${esc(fmtDur(c.seconds))}</td><td>${statusChip("selesai")}</td>
+    <td><span class="actions">
+      <a class="btn btn-small" href="/api/conversions/${encodeURIComponent(c.id)}/prd" download="${esc(c.prd_file)}">Unduh PRD</a>
+      <a class="btn btn-small" href="/api/conversions/${encodeURIComponent(c.id)}/review" download>Review (PDF)</a>
+      ${c.prd_exists ? `<button type="button" class="btn btn-small" data-action="conv-use" data-file="${esc(c.prd_file)}">Buat test case</button>` : ""}
+      <button type="button" class="btn btn-small" data-action="conv-delete" data-conv="${esc(c.id)}">Hapus</button></span></td></tr>`;
   app.innerHTML = `
-  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses yang pernah dijalankan di laptop ini, terbaru di atas.</p></div>
-    <div class="actions"><button type="button" class="btn" data-action="compare">Bandingkan 2 yang dipilih</button></div></header>
-  <section class="card">
-    ${runs.length ? `<div class="table-wrap"><table style="min-width:820px"><thead><tr>
-      <th><span class="sr-only">Pilih</span></th><th>Selesai</th><th>Dokumen</th><th>AI penulis</th><th class="r">Test case</th>
-      <th class="r">Perlu dicek</th><th class="r">Ditulis ulang</th><th class="r">Lama</th><th>Status</th><th><span class="sr-only">Aksi</span></th></tr></thead><tbody>
-      ${runs.map((r) => { const rep = r.report || {}; return `<tr>
-        <td><input type="checkbox" data-action="pick-run" data-run="${esc(r.id)}" ${S.compare.has(r.id) ? "checked" : ""} aria-label="Pilih proses ${esc(fmtDate(r.finished || r.started))}"></td>
-        <td class="num">${esc(fmtDate(r.finished || r.started))}</td><td>${esc(r.prd_title)}</td>
-        <td class="muted">${esc((r.models || {}).gen || "-")}</td><td class="r num">${num(rep.test_cases)}</td><td class="r num">${num(rep.needs_review)}</td>
-        <td class="r num">${num((r.progress || {}).retry)}</td><td class="r">${esc(fmtDur(runDur(r)))}</td><td>${statusChip(r.status)}</td>
-        <td><span class="actions" style="flex-wrap:nowrap">${r.status === "selesai" ? `<a class="btn btn-small" href="#hasil/${esc(r.id)}">Lihat hasil</a>` : r.status === "berjalan" ? `<a class="btn btn-small" href="#berjalan">Lihat progres</a>` : ""}
-          ${r.status !== "berjalan" ? `<button type="button" class="btn btn-small" data-action="delete-run" data-run="${esc(r.id)}">Hapus</button>` : ""}</span></td></tr>`; }).join("")}
-      </tbody></table></div>` : `<div class="empty"><p>Belum ada proses. Hasil lama di folder outputs diimpor otomatis saat dashboard pertama kali dibuka.</p><a class="btn btn-primary" href="#mulai">Mulai buat test case</a></div>`}
+  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini (pembuatan test case dan konversi catatan), terbaru di atas.</p></div>
+    <div class="actions"><button type="button" class="btn" data-action="compare">Bandingkan 2 test case yang dipilih</button></div></header>
+  <section class="card hist">
+    ${rows.length ? `<div class="table-wrap"><table style="min-width:980px"><thead><tr>
+      <th><span class="sr-only">Pilih</span></th><th>Waktu</th><th>Jenis</th><th>Dokumen</th><th>Ringkasan</th>
+      <th class="r">Lama</th><th>Status</th><th style="width:300px"><span class="sr-only">Aksi</span></th></tr></thead><tbody>
+      ${rows.map((x) => (x.kind === "tc" ? tcRow(x.r) : convRow(x.c))).join("")}
+      </tbody></table></div>` : `<div class="empty"><p>Belum ada proses. Mulai dari konversi catatan atau buat test case dari PRD.</p>
+        <div class="actions"><a class="btn" href="#catatan">Catatan Konversi ke PRD</a><a class="btn btn-primary" href="#mulai">Mulai buat test case</a></div></div>`}
   </section>
   <section class="card" id="compare-zone" hidden aria-labelledby="cmp-title"></section>`;
 }
@@ -876,9 +1045,11 @@ async function route() {
   const v = view || "beranda";
   setActiveNav(v);
   if (v !== "berjalan") closeStream();
+  if (v !== "catatan") stopNotesTimer();
   try {
     if (v === "beranda") await viewBeranda();
     else if (v === "mulai") await viewMulai();
+    else if (v === "catatan") await viewCatatan();
     else if (v === "berjalan") await viewBerjalan();
     else if (v === "hasil") await viewHasil(arg && decodeURIComponent(arg));
     else if (v === "cakupan") { setActiveNav("cakupan"); await viewHasil(arg && decodeURIComponent(arg), "cakupan"); }
@@ -898,7 +1069,13 @@ app.addEventListener("click", (ev) => {
   const a = el.dataset.action, H = S.hasil;
   if (a === "upload") document.getElementById("prd-file").click();
   else if (a === "start") startRun();
-  else if (a === "recheck") route();
+  else if (a === "notes-start") notesStart();
+  else if (a === "notes-save") notesSave(el.dataset.file, false);
+  else if (a === "notes-use") notesSave(el.dataset.file, true);
+  else if (a === "notes-reset") notesReset();
+  else if (a === "conv-delete") convDelete(el.dataset.conv, location.hash.startsWith("#riwayat"));
+  else if (a === "conv-use") { S.mulaiPrd = el.dataset.file; location.hash = "#mulai"; }
+  else if (a === "recheck") recheck(el);
   else if (a === "cancel") cancelRun();
   else if (a === "pick") { H.sel = el.dataset.tc; renderTcZone(); }
   else if (a === "prev") { H.page = Math.max(0, H.page - 1); renderTcZone(); }
@@ -921,7 +1098,11 @@ app.addEventListener("keydown", (ev) => {
 app.addEventListener("change", (ev) => {
   const t = ev.target;
   if (t.id === "prd-file") uploadPrd(t.files[0]);
-  else if (t.name === "prd") { S.mulaiPrd = t.value; const e = document.getElementById("estimate"); if (e && S.estimate) e.textContent = S.estimate(t.value); }
+  else if (t.id === "prd-select") {
+    S.mulaiPrd = t.value;
+    const e = document.getElementById("estimate"); if (e && S.estimate) e.textContent = S.estimate(t.value);
+    const f = document.getElementById("prd-file-name"); if (f) f.textContent = `File: ${t.value}`;
+  }
   else if (t.dataset.action === "pick-run") { t.checked ? S.compare.add(t.dataset.run) : S.compare.delete(t.dataset.run); }
   else if (t.dataset.filter && t.dataset.filter !== "q") {
     S.hasil.filters[t.dataset.filter] = t.type === "checkbox" ? t.checked : t.value;

@@ -44,7 +44,43 @@ def _ints(*texts) -> List[int]:
     return sorted(out)
 
 
-def feature_of(atom: Dict[str, Any], titles: Dict[str, str]) -> str:
+_STOP = set("""the a an and or of to in on at by for with from is are be been must may can cannot not only when
+then than this that these those it its as into within after before each any all one more less least most per
+system customer user data value values valid invalid correctly correct required rules rule shall should will
+allow allows allowed enforce enforced proceed rejected reject accepted accept applied apply handled handle evaluated
+supported support prevent prevents ensure ensures happen happens field fields
+yang dan atau di ke dari untuk dengan pada adalah harus dapat tidak""".split())
+
+
+def _kw(text: str) -> List[str]:
+    return [w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 2 and w not in _STOP]
+
+
+def match_feature(text: str, fr_texts: Dict[str, str], titles: Dict[str, str]) -> Optional[str]:
+    """Cari FR yang paling cocok dengan kalimat aturan (untuk BR/AC/edge yang tidak menyebut FR).
+    Bobot kata = 1/jumlah FR yang memuatnya; kata di judul FR dihitung dua kali. Ragu -> None."""
+    words = set(_kw(text))
+    if not words or not fr_texts:
+        return None
+    df: Dict[str, int] = {}
+    toks = {rid: (set(_kw(t)), set(_kw(titles.get(rid, "")))) for rid, t in fr_texts.items()}
+    for body, head in toks.values():
+        for w in body | head:
+            df[w] = df.get(w, 0) + 1
+    scores = sorted(((sum((2 if w in head else 1) / df[w] for w in words & (body | head)), rid)
+                     for rid, (body, head) in toks.items()), reverse=True)
+    if not scores or scores[0][0] < 0.9:
+        return None
+    best = toks[scores[0][1]]
+    shared = words & (best[0] | best[1])
+    if len(shared) < 2 and not (shared & best[1]):  # satu kata kebetulan sama (mis. "checkout") belum cukup
+        return None
+    if len(scores) > 1 and scores[1][0] > 0.75 * scores[0][0]:
+        return None
+    return titles.get(scores[0][1])
+
+
+def feature_of(atom: Dict[str, Any], titles: Dict[str, str], fr_texts: Optional[Dict[str, str]] = None) -> str:
     """Sub Module/Menu = fitur yang diuji: judul FR/NFR; decision table = judul tabelnya;
     edge case / state / acceptance criteria = judul FR terkait; tidak ada -> "-"."""
     itype = atom.get("item_type", "")
@@ -59,14 +95,18 @@ def feature_of(atom: Dict[str, Any], titles: Dict[str, str]) -> str:
                 return titles[r]
     if itype == "ST" and atom.get("item_title"):
         return atom["item_title"]
-    return "-"
+    found = match_feature(" ".join([atom.get("text", "")] + [a.get("text", "") for a in atom.get("aliases", [])]),
+                          fr_texts or {}, titles)
+    return found or "-"
 
 
 class _Builder:
-    def __init__(self, hints: Dict[str, str], module_name: str = "General", titles: Optional[Dict[str, str]] = None):
+    def __init__(self, hints: Dict[str, str], module_name: str = "General", titles: Optional[Dict[str, str]] = None,
+                 fr_texts: Optional[Dict[str, str]] = None):
         self.hints = hints or {}
         self.module_name = module_name or "General"
         self.titles = titles or {}
+        self.fr_texts = fr_texts or {}
         self.obs: List[Dict[str, Any]] = []
 
     def add(self, atom, scenario, polarity, technique, *, value=None, data_text=None, expect=None,
@@ -77,7 +117,7 @@ class _Builder:
             "kind": atom["kind"],
             "requirement_ids": list(atom["requirement_ids"]),
             "module": self.module_name,
-            "sub_label": feature_of(atom, self.titles),
+            "sub_label": feature_of(atom, self.titles, self.fr_texts),
             "technique": technique,
             "polarity": polarity,
             "scenario": scenario,
@@ -99,7 +139,11 @@ class _Builder:
         return ob
 
 
-def _label(dt: str) -> str:
+def _label(dt: str, atom: Optional[Dict[str, Any]] = None) -> str:
+    """Judul Test Data = nama field yang diuji (judul requirement, mis. "Recipient Name"),
+    supaya QA tahu nilai itu diisi ke field mana. Tanpa judul -> label jenis data."""
+    if atom and atom.get("item_type") in ("FR", "NFR") and atom.get("item_title"):
+        return atom["item_title"]
     return DATA_LABEL.get(dt, "Nilai input")
 
 
@@ -108,14 +152,12 @@ def _value_ob(b: _Builder, atom, dt, n, unit, scenario, polarity, tech, valid_ex
     """Buat obligation berbasis nilai dengan panjang n; verifikasi len(value)==n."""
     v = value if value is not None else make_value(dt, n, b.hints)
     ok = (len(v) == n) if value is None else True
-    label = _label(dt)
+    label = _label(dt, atom)
     if not ok:
         v = None
     text = None
     if v is not None:
-        text = f"{label}: {v}\nPanjang: {n} {unit}"
-        if len(v) > 60:
-            text = f"{label}: {v}\nPanjang: {n} {unit} (nilai lengkap di atas)"
+        text = f"{label}: {v} ({n} {unit})"
     return b.add(atom, scenario, polarity, tech, value=v, data_text=text or f"{label}: (panjang {n} {unit})",
                  expect=valid_expect if polarity == "Positive" else invalid_expect, priority=priority,
                  extra_numbers=[n])
@@ -144,7 +186,7 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
             n = lo
             v = with_non_digit(make_value(dt, n, b.hints))
             b.add(atom, f"{label} dengan panjang {n} {unit} tetapi mengandung karakter non-angka", "Negative",
-                  "Equivalence Partitioning", value=v, data_text=f"{_label(dt)}: {v}",
+                  "Equivalence Partitioning", value=v, data_text=f"{_label(dt, atom)}: {v}",
                   expect="Sistem menolak nilai karena hanya angka yang diperbolehkan", extra_numbers=[n])
 
     elif k in ("length_max", "length_min"):
@@ -184,7 +226,7 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
             if unit == "digit":
                 v = with_non_digit(make_value(dt, n, b.hints))
                 b.add(atom, f"{label} dengan panjang {n} {unit} tetapi mengandung karakter non-angka", "Negative",
-                      "Equivalence Partitioning", value=v, data_text=f"{_label(dt)}: {v}",
+                      "Equivalence Partitioning", value=v, data_text=f"{_label(dt, atom)}: {v}",
                       expect="Sistem menolak nilai karena hanya angka yang diperbolehkan", extra_numbers=[n])
 
     elif k == "count_max":
@@ -273,13 +315,13 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
     elif k == "required":
         for v, sc in (("", "kosong"), ("   ", "hanya berisi spasi")):
             b.add(atom, f"{label} {sc}", "Negative", "Equivalence Partitioning", value=v,
-                  data_text=f"{_label(dt)}: \"{v}\"", expect="Sistem menolak karena field wajib diisi", priority="High")
+                  data_text=f"{_label(dt, atom)}: \"{v}\"", expect="Sistem menolak karena field wajib diisi", priority="High")
 
     elif k == "unique":
         b.add(atom, f"{label} yang belum pernah terdaftar", "Positive", "Equivalence Partitioning",
-              data_text=f"{_label(dt)}: nilai baru yang unik", expect="Nilai diterima karena unik")
+              data_text=f"{_label(dt, atom)}: nilai baru yang unik", expect="Nilai diterima karena unik")
         b.add(atom, f"{label} yang sudah terdaftar sebelumnya (duplikat)", "Negative", "Equivalence Partitioning",
-              data_text=f"{_label(dt)}: nilai yang sama dengan data yang sudah ada", expect="Sistem menolak karena nilai sudah digunakan",
+              data_text=f"{_label(dt, atom)}: nilai yang sama dengan data yang sudah ada", expect="Sistem menolak karena nilai sudah digunakan",
               priority="High")
 
     elif k == "format":
@@ -290,17 +332,17 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
         elif fm == "email":
             valid = baseline_valid("email", b.hints)
             b.add(atom, "Email dengan format valid", "Positive", "Equivalence Partitioning", value=valid,
-                  data_text=f"Email: {valid}", expect="Format email diterima")
+                  data_text=f"{_label('email', atom)}: {valid}", expect="Format email diterima")
             for var in invalid_email_variants()[:3]:
                 b.add(atom, f"Email dengan format tidak valid ({var['label']})", "Negative", "Equivalence Partitioning",
-                      value=var["value"], data_text=f"Email: {var['value']}", expect="Sistem menolak karena format email tidak valid")
+                      value=var["value"], data_text=f"{_label('email', atom)}: {var['value']}", expect="Sistem menolak karena format email tidak valid")
         elif fm == "digits_only":
             valid = make_value(dt if dt in ("phone", "digits") else "digits", p.get("len", 12), b.hints)
             b.add(atom, "Nilai hanya berisi angka", "Positive", "Equivalence Partitioning", value=valid,
-                  data_text=f"{_label(dt)}: {valid}", expect="Nilai diterima")
+                  data_text=f"{_label(dt, atom)}: {valid}", expect="Nilai diterima")
             for lab, v in (("mengandung huruf", with_non_digit(valid)), ("mengandung simbol", with_symbol(valid))):
                 b.add(atom, f"Nilai {lab}", "Negative", "Equivalence Partitioning", value=v,
-                      data_text=f"{_label(dt)}: {v}", expect="Sistem menolak karena hanya angka yang diperbolehkan")
+                      data_text=f"{_label(dt, atom)}: {v}", expect="Sistem menolak karena hanya angka yang diperbolehkan")
         elif fm == "alnum":
             valid = make_value("alnum", 8)
             b.add(atom, "Nilai alfanumerik valid", "Positive", "Equivalence Partitioning", value=valid,
@@ -324,19 +366,19 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
                 length = a["params"]["min"]
         full = make_value("password", length, b.hints)
         b.add(atom, f"{label} memuat semua kelas karakter ({', '.join(names[c] for c in classes)})", "Positive",
-              "Equivalence Partitioning", value=full, data_text=f"{_label(dt)}: {full}\nPanjang: {length} karakter",
+              "Equivalence Partitioning", value=full, data_text=f"{_label(dt, atom)}: {full} ({length} karakter)",
               expect="Nilai diterima karena komposisi lengkap", extra_numbers=[length])
         for c in classes:
             v = password_missing_class(length, c)
             b.add(atom, f"{label} tanpa {names[c]}", "Negative", "Equivalence Partitioning", value=v,
-                  data_text=f"{_label(dt)}: {v}\nPanjang: {length} karakter",
+                  data_text=f"{_label(dt, atom)}: {v} ({length} karakter)",
                   expect=f"Sistem menolak karena tidak memuat {names[c]}", priority="High", extra_numbers=[length])
 
     elif k == "whitespace":
         base = baseline_valid(dt if dt in ("email", "password") else "text", b.hints, 0)
         for pos, v in (("di awal", " " + base), ("di akhir", base + " ")):
             b.add(atom, f"Nilai dengan spasi {pos}", "Auto", "Edge Case", value=v,
-                  data_text=f"{_label(dt)}: \"{v}\" (ada spasi {pos})",
+                  data_text=f"{_label(dt, atom)}: \"{v}\" (ada spasi {pos})",
                   precondition=None)
 
     elif k == "enumeration":
@@ -352,25 +394,26 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
     elif k == "transition":
         fr, to, note, mach = p["from"], p["to"], p.get("note", ""), p.get("machine", "")
         b.add(atom, f"Transisi state {fr} -> {to}" + (f" ({note})" if note else ""), "Positive", "State Transition",
-              step_hint=(f"Lakukan pemicu: {note}" if note else f"Lakukan aksi yang mengubah state {fr} menjadi {to}"),
+              step_hint=(f"Lakukan pemicu: {note}" if note else f"Jalankan aksi yang mengubah status {fr} menjadi {to}"),
               expect=f"State berubah dari {fr} menjadi {to}", priority="High", precondition=f"State awal = {fr}",
               flag_note=(None if note else "PRD tidak menyebut pemicu transisi secara eksplisit - konfirmasi"))
 
     elif k == "invalid_transition":
         fr, to = p["from"], p["to"]
         b.add(atom, f"Percobaan transisi tidak terdefinisi {fr} -> {to}", "Negative", "State Transition",
-              step_hint=f"Coba ubah state langsung menjadi {to}", expect=f"Transisi ditolak; state tetap {fr}",
+              step_hint=f"Coba ubah status langsung dari {fr} menjadi {to}", expect=f"Transisi ditolak; state tetap {fr}",
               priority="Medium", precondition=f"State awal = {fr}", derived=True)
 
     elif k == "decision":
         conds = p["conditions"]
         combos = _decision_rows(conds)
         for i, combo in enumerate(combos, 1):
-            inputs = [(c["name"], v) for c, v in zip(conds, combo) if not _STATE_COND.search(c["name"])]
-            states = [(c["name"], v) for c, v in zip(conds, combo) if _STATE_COND.search(c["name"])]
-            lines = "\n".join(f"{nm} = {v}" for nm, v in inputs) or None
-            pre = ("Kondisi: " + ", ".join(f"{nm} = {v}" for nm, v in states)) if states else None
-            bad = [(c["name"], v) for c, v in zip(conds, combo) if _REJECT_VALUE.match(str(v).strip())]
+            live = [(c, v) for c, v in zip(conds, combo) if not str(v).startswith("N/A")]  # N/A = tidak diisi QA
+            inputs = [(c["name"], v) for c, v in live if not _STATE_COND.search(c["name"])]
+            states = [(c["name"], v) for c, v in live if _STATE_COND.search(c["name"])]
+            lines = "\n".join(f"{nm}: {v}" for nm, v in inputs) or None
+            pre = ("Kondisi: " + ", ".join(f"{nm} bernilai {v}" for nm, v in states)) if states else None
+            bad = [(c["name"], v) for c, v in zip(conds, combo) if is_reject(c, v)]
             # kombinasi yang memuat nilai "pasti ditolak" -> polaritas dipastikan KODE; sisanya LLM + catatan PRD
             has_na = any(str(v).startswith("N/A") for v in combo)
             b.add(atom, f"Decision table [{p.get('title', '')}]: " + "; ".join(f"{c['name']}={v}" for c, v in zip(conds, combo)),
@@ -396,6 +439,14 @@ def design_atom(b: _Builder, atom: Dict[str, Any], all_atoms: List[Dict[str, Any
 _STATE_COND = re.compile(r"\b(state|status|count|history|attempt|lockout|riwayat|kondisi|jumlah percobaan)\b", re.I)
 
 _REJECT_VALUE = re.compile(r"^(invalid|expired|revoked|locked|already used|non[- ]?compliant|in last)\b", re.I)
+
+
+def is_reject(cond: Dict[str, Any], value: Any) -> bool:
+    """Nilai kondisi yang PASTI berujung penolakan. Utama: hasil analisis AI atas PRD ini (reject_values);
+    pola kata umum hanya dipakai bila analisis AI tidak tersedia."""
+    if "reject_values" in cond:
+        return str(value).strip().lower() in {str(x).strip().lower() for x in cond["reject_values"]}
+    return bool(_REJECT_VALUE.match(str(value).strip()))
 
 
 _OFF_VALUE = re.compile(r"^(disabled|off|inactive|not enrolled|nonaktif)\b", re.I)
@@ -425,24 +476,28 @@ def _decision_rows(conds: List[Dict[str, Any]], cap: int = 16) -> List[tuple]:
     Kondisi yang bergantung pada pengendali berstatus OFF (mis. 'MFA Verification Code' saat 'MFA Status = Disabled')
     menjadi "N/A (...)" sehingga kombinasi mustahil tidak dibuat.
     """
-    bad = lambda v: bool(_REJECT_VALUE.match(str(v).strip()))
-
     def pick(c):
-        vals = [v for v in c["values"] if not bad(v)]
+        vals = [v for v in c["values"] if not is_reject(c, v)]
+        if c.get("normal_value") in vals:  # nilai normal hasil analisis AI atas PRD ini
+            return c["normal_value"]
         return next((v for v in vals if _ON_VALUE.match(str(v).strip())), vals[0] if vals else c["values"][0])
 
     baseline = tuple(pick(c) for c in conds)
     rows: List[tuple] = [baseline]
-    for r in _combos(conds, cap=cap * 2):
-        if not any(bad(v) for v in r) and r not in rows:
+    # kombinasi berpasangan HANYA dari nilai yang tidak pasti ditolak (kalau dihitung dari semua nilai lalu
+    # disaring, pasangan antar-nilai normal ikut hilang dan sebagian nilai tidak pernah teruji)
+    good = [{**c, "values": [v for v in c["values"] if not is_reject(c, v)] or list(c["values"])} for c in conds]
+    for r in _combos(good, cap=cap * 2):
+        if r not in rows:
             rows.append(r)
     for i, c in enumerate(conds):
         for v in c["values"]:
-            if bad(v):
+            if is_reject(c, v):
                 r = tuple(v if j == i else baseline[j] for j in range(len(conds)))
                 if r not in rows:
                     rows.append(r)
     ctrl = _controllers(conds)
+    idx = {c["name"]: i for i, c in enumerate(conds)}
     out: List[tuple] = []
     for r in rows:
         r = list(r)
@@ -450,6 +505,13 @@ def _decision_rows(conds: List[Dict[str, Any]], cap: int = 16) -> List[tuple]:
             if _OFF_VALUE.match(str(r[i]).strip()):
                 for j in deps:
                     r[j] = f"N/A ({conds[i]['name']} = {r[i]})"
+        for _ in range(2):  # ketergantungan hasil analisis AI atas PRD (mis. hasil OTP hanya berlaku bila OTP wajib)
+            for j, c in enumerate(conds):
+                dep = c.get("applies_if")
+                i = idx.get(dep["name"]) if dep else None
+                if i is not None and not str(r[j]).startswith("N/A") and \
+                        (str(r[i]).startswith("N/A") or r[i] not in dep["values"]):
+                    r[j] = f"N/A ({conds[i]['name']} = {str(r[i]).split(' (')[0]})"
         r = tuple(r)
         if r not in out:
             out.append(r)
@@ -510,7 +572,24 @@ def design_obligations(atoms: List[Dict[str, Any]], hints: Optional[Dict[str, st
     if titles is None:
         titles = {a["source"]: a["item_title"] for a in atoms
                   if a.get("item_type") in ("FR", "NFR") and a.get("source") and a.get("item_title")}
-    b = _Builder(hints or {}, module_name, titles)
+    # transisi tidak sah yang hanya punya nama mesin status (mis. "MFA Setup State") -> ID FR dari transisi
+    # sah pada mesin yang sama, supaya kolom Requirement ID dan Sub Module tidak kosong
+    by_machine: Dict[str, List[str]] = {}
+    for a in atoms:
+        if a.get("kind") == "transition":
+            ids = by_machine.setdefault(a.get("params", {}).get("machine", ""), [])
+            ids.extend(r for r in a.get("requirement_ids", []) if re.match(r"^[A-Z]{2,4}-\d+$", str(r)) and r not in ids)
+    for a in atoms:
+        if a.get("kind") == "invalid_transition" and not any(re.match(r"^[A-Z]{2,4}-\d+$", str(r)) for r in a.get("requirement_ids", [])):
+            ids = by_machine.get(a.get("params", {}).get("machine", ""))
+            if ids:
+                a["requirement_ids"] = list(ids)
+    fr_texts: Dict[str, str] = {}
+    for a in atoms:
+        if a.get("item_type") in ("FR", "NFR") and a.get("source"):
+            fr_texts[a["source"]] = fr_texts.get(a["source"], "") + " " + a.get("text", "") + " " + \
+                " ".join(x.get("text", "") for x in a.get("aliases", []))
+    b = _Builder(hints or {}, module_name, titles, fr_texts)
     for atom in atoms:
         design_atom(b, atom, atoms)
     obs = b.obs
@@ -534,11 +613,264 @@ def design_obligations(atoms: List[Dict[str, Any]], hints: Optional[Dict[str, st
     return uniq
 
 
+DT_SYSTEM = ("Kamu QA analyst. Tugasmu menentukan nilai uji KONKRET untuk kondisi decision table berdasarkan isi PRD. "
+             "Jawab HANYA JSON valid.")
+
+
+def _cond_key(name: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", str(name or "").lower()))
+
+
+def _dt_prompt(prd_text: str, lines: List[str]) -> str:
+    # PRD di AWAL prompt: panggilan berikutnya memakai ulang hasil baca PRD (cache Ollama), jadi lebih cepat
+    return (f"PRD:\n{prd_text[:14000]}\n\nKondisi decision table:\n" + "\n".join(lines) + "\n\n"
+            "Untuk SETIAP kondisi di atas (jangan ada yang terlewat) tentukan berdasarkan isi PRD:\n"
+            "- values: nilai uji. Bila sudah ada, salin persis. Bila \"(nilai belum ada di PRD)\", tulis 2-3 nilai konkret "
+            "dari bagian lain PRD (istilah dan angka persis seperti di PRD, jangan diterjemahkan; "
+            "untuk kondisi ya/tidak tulis kondisi konkretnya, mis. ambang angka dari PRD).\n"
+            "- normal: satu nilai dari values yang membuat proses berjalan normal/berhasil.\n"
+            "- reject: nilai dari values yang SELALU membuat sistem menolak/menggagalkan proses apa pun kondisi lainnya "
+            "menurut PRD; [] bila tidak ada.\n"
+            "- berlaku_jika: bila menurut PRD kondisi ini HANYA berpengaruh saat kondisi LAIN di tabel yang sama bernilai "
+            "tertentu, tulis {\"name\":\"<nama kondisi lain>\",\"values\":[\"<nilai kondisi lain>\"]}; selain itu null. "
+            "Pola: \"status X\" hanya berlaku bila \"X\" bernilai ada/dipakai; \"hasil verifikasi Y\" hanya berlaku bila "
+            "\"Y\" diwajibkan; \"hasil layanan Z\" hanya berlaku untuk metode yang memakai Z.\n"
+            "Salin \"table\" dan \"name\" persis seperti tertulis di dalam [ ] dan sebelum titik dua.\n"
+            'FORMAT: {"conditions":[{"table":"...","name":"...","values":["...","..."],"normal":"...","reject":["..."],'
+            '"berlaku_jika":null}]}')
+
+
+def _apply_dt(tables: List[Dict[str, Any]], data: Any) -> int:
+    """Pasangkan jawaban AI ke kondisi (nama persis, lalu kemiripan kata; nama sama dipasangkan berurutan)."""
+    rows = [r for r in ((data or {}).get("conditions", []) if isinstance(data, dict) else []) if isinstance(r, dict) and r.get("name")]
+    used: set = set()
+    n = 0
+    for a in tables:
+        title = str(a["params"].get("title", "")).strip().lower()
+        for c in a.get("params", {}).get("conditions", []):
+            if c.get("_dt_done"):
+                continue
+            ck = _cond_key(c["name"])
+            best, score = None, 0.0
+            for i, r in enumerate(rows):
+                if i in used:
+                    continue
+                rk = _cond_key(r["name"])
+                sc = len(ck & rk) / max(1, len(ck | rk))
+                if str(r["name"]).strip().lower() == c["name"].lower():
+                    sc = 2.0
+                if title and str(r.get("table", "")).strip().lower() == title:
+                    sc += 0.25
+                if sc > score:
+                    best, score = i, sc
+            if best is None or score < 0.5:
+                continue
+            used.add(best)
+            r = rows[best]
+            vals = [str(v).strip() for v in (r.get("values") or []) if str(v).strip()]
+            if c.get("no_values") and 2 <= len(vals) <= 4:
+                c["values"], c["values_from"] = vals, "AI dari isi PRD"
+                c.pop("no_values", None)
+            if c.get("no_values"):
+                continue
+            known = {str(v).strip().lower(): v for v in c["values"]}
+            c["reject_values"] = [known[str(x).strip().lower()] for x in (r.get("reject") or []) if str(x).strip().lower() in known]
+            if str(r.get("normal", "")).strip().lower() in known:
+                c["normal_value"] = known[str(r["normal"]).strip().lower()]
+            if isinstance(r.get("berlaku_jika"), dict):
+                c["_applies_raw"] = r["berlaku_jika"]
+            c["_dt_done"] = True
+            n += 1
+    return n
+
+
+def infer_decision_values(atoms: List[Dict[str, Any]], prd_text: str) -> int:
+    """Analisis decision table dari isi PRD:
+      - kondisi tanpa nilai di PRD (mis. "Payment method") -> 2-3 nilai konkret dari bagian lain PRD
+      - nilai normal (baris dasar) dan nilai yang PASTI ditolak sistem menurut PRD
+    Satu panggilan untuk semua tabel; tabel yang jawabannya belum lengkap ditanyakan ulang per tabel.
+    Gagal total -> nilai cadangan "memenuhi / valid" dan pola kata umum. Return jumlah kondisi yang dianalisis."""
+    tables = [a for a in atoms if a.get("kind") == "decision"]
+    if not tables:
+        return 0
+    from tools import llm
+
+    def lines_of(tbls):
+        out = []
+        for a in tbls:
+            for c in a.get("params", {}).get("conditions", []):
+                if c.get("_dt_done"):
+                    continue
+                vals = "(nilai belum ada di PRD)" if c.get("no_values") else " / ".join(map(str, c["values"]))
+                out.append(f"- [{a['params'].get('title', '')}] {c['name']}: {vals}")
+        return out
+
+    n = _apply_dt(tables, llm.chat_json(llm.generation_model(), DT_SYSTEM, _dt_prompt(prd_text, lines_of(tables)),
+                                        temperature=0.0, num_predict=2500))
+    for a in tables:  # tanya ulang hanya tabel yang masih ada kondisi belum terjawab
+        missing = lines_of([a])
+        if missing:
+            n += _apply_dt([a], llm.chat_json(llm.generation_model(), DT_SYSTEM, _dt_prompt(prd_text, missing),
+                                               temperature=0.0, num_predict=1200))
+    for a in tables:
+        conds = a.get("params", {}).get("conditions", [])
+        for c in conds:
+            c.pop("_dt_done", None)
+            raw = c.pop("_applies_raw", None)
+            dep = _resolve_dependency(c, conds, raw) if raw else None
+            if dep:
+                c["applies_if"] = dep
+    return n
+
+
+def _resolve_dependency(c: Dict[str, Any], conds: List[Dict[str, Any]], raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Jawaban AI "berlaku_jika" -> {"name": kondisi pengendali, "values": nilai pengendali yang membuat c berlaku}.
+    Hanya diterima bila nama & nilainya cocok dengan kondisi lain di tabel yang sama (bukan karangan)."""
+    ck = _cond_key(raw.get("name"))
+    best, score = None, 0.0
+    for d in conds:
+        if d is c:
+            continue
+        dk = _cond_key(d["name"])
+        sc = len(ck & dk) / max(1, len(ck | dk))
+        if str(raw.get("name", "")).strip().lower() == d["name"].lower():
+            sc = 2.0
+        if sc > score:
+            best, score = d, sc
+    if not best or score < 0.5:
+        return None
+    want = [str(v).strip().lower() for v in (raw.get("values") or []) if str(v).strip()]
+    vals = [v for v in best["values"] if str(v).strip().lower() in want or
+            any(w and (w in str(v).lower() or str(v).lower() in w) for w in want)]
+    if not vals or len(vals) == len(best["values"]):  # semua nilai = tidak ada ketergantungan nyata
+        return None
+    return {"name": best["name"], "values": vals}
+
+
+# kata fungsi bahasa (bukan istilah PRD tertentu)
+_EN_WORDS = {"the", "is", "are", "was", "when", "must", "will", "be", "of", "and", "to", "always", "remains", "becomes",
+             "not", "with", "for", "a", "an", "if", "only", "can", "cannot", "should", "after", "before", "until"}
+_ID_WORDS = {"dan", "yang", "tidak", "akan", "karena", "menjadi", "tetap", "dengan", "sebesar", "sistem", "dari", "untuk",
+             "pada", "sudah", "belum", "harus", "dapat", "ditolak", "diproses", "berhasil", "gagal", "saat", "setelah"}
+
+
+def looks_english(text: str) -> bool:
+    """Deteksi bahasa sederhana (kata umum), dipakai untuk menolak expected berbahasa Inggris."""
+    w = re.findall(r"[a-z]+", (text or "").lower())
+    en = sum(x in _EN_WORDS for x in w)
+    idn = sum(x in _ID_WORDS for x in w)
+    return en >= 3 and en > idn
+
+
+def relevant_prd(prd_text: str, title: str, conditions: List[Dict[str, Any]], limit: int = 3500) -> List[str]:
+    """Bagian PRD (per judul/heading, lengkap dengan sub-poinnya) yang paling berkaitan dengan nama/nilai kondisi
+    decision table. Bobot kata = seberapa jarang kata itu di PRD (kata khas seperti "express"/"pending" kuat, kata umum
+    lemah). Bagian decision table itu sendiri dan bagian panduan QA tidak diambil (hanya daftar kondisi, bukan aturan)."""
+    import math
+    keys = set()
+    for c in conditions:
+        for txt in [c["name"], *map(str, c.get("values") or [])]:
+            keys |= {w for w in re.findall(r"[a-z0-9]+", txt.lower()) if len(w) >= 3 and not w.isdigit()}
+    secs: List[List[str]] = []
+    for line in prd_text.splitlines():
+        if re.match(r"\s*#{2,}\s", line) or not secs:
+            secs.append([])
+        l = line.strip(" -*\t")
+        if l:
+            secs[-1].append(l)
+    skip = re.compile(r"(?i)decision table|test data|coverage|acceptance|edge.case|document|conditions?:")
+    secs = [x for x in secs if len(x) > 1 and not skip.search(x[0])
+            and not any(skip.search(l) for l in x[1:3])]  # bagian daftar kondisi decision table (bukan aturan)
+    toks = [set(re.findall(r"[a-z0-9]+", " ".join(x).lower())) for x in secs]
+    df = {k: sum(1 for t in toks if k in t) for k in keys}
+    scored = []
+    for i, t in enumerate(toks):
+        sc = sum(math.log((len(secs) + 1) / (df[k] + 0.5)) for k in keys if k in t and df[k])
+        if sc > 0:
+            scored.append((sc, i))
+    if not scored:
+        return []
+    cut = max(sc for sc, _ in scored) * 0.4
+    keep, size = [], 0
+    for sc, i in sorted(scored, reverse=True):
+        txt = len(" ".join(secs[i]))
+        if sc < cut or size + txt > limit:
+            continue
+        keep.append(i)
+        size += txt
+    out = []
+    for i in sorted(keep):
+        head = re.sub(r"^#+\s*", "", secs[i][0])
+        body = secs[i][1:]
+        if len(" ".join(body)) > 800:  # bagian besar (mis. tabel business rule): hanya baris yang menyebut kata kunci
+            body = [l for l in body if keys & set(re.findall(r"[a-z0-9]+", l.lower()))]
+        out += [f"[{head}] " + l for l in body if not re.fullmatch(r"[|\- ]+|\|\s*ID\s*\|.*", l)]
+    return out
+
+
+def infer_decision_outcomes(obs: List[Dict[str, Any]], prd_text: str, atoms: Optional[List[Dict[str, Any]]] = None) -> int:
+    """Hasil tiap baris decision table: SATU baris per panggilan AI, dengan aturan PRD yang relevan (dipilih kode dari
+    nama/nilai kondisi tabel) dan penalaran bertahap per kondisi. Model kecil jauh lebih akurat menilai satu
+    kombinasi daripada banyak sekaligus. Hasilnya jadi "Hasil yang diharapkan (inti)"; aturan yang dipakai diberikan
+    ke AI pemeriksa. Polaritas tetap Auto -> AI pemeriksa menilai ulang secara terpisah."""
+    from tools import llm
+    model = llm.auto_model() or llm.generation_model()
+    conds_of = {}
+    for a in atoms or []:
+        if a.get("kind") == "decision":
+            conds_of[str(a["params"].get("title", "")).strip()] = a["params"].get("conditions", [])
+    n = 0
+    tables: Dict[str, List[Dict[str, Any]]] = {}
+    for o in obs:
+        if o["kind"] == "decision" and not o.get("expect_text"):
+            tables.setdefault(o.get("sub_label") or "Decision", []).append(o)
+    for title, rows in tables.items():
+        conds = conds_of.get(title) or [{"name": ln.split(":")[0], "values": [ln.split(":", 1)[-1]]}
+                                        for o in rows for ln in (o.get("data_text") or "").splitlines() if ":" in ln]
+        rules = relevant_prd(prd_text, title, conds) or [prd_text[:3500]]
+        head = ("Aturan PRD yang relevan:\n- " + "\n- ".join(rules) + "\n\n"
+                "Arti keputusan:\n- DIPROSES = aksi berjalan sesuai aturan (termasuk nilai/biaya dihitung, potongan "
+                "diterapkan, status berubah atau menunggu konfirmasi/persetujuan).\n- DITOLAK = sistem menolak/memblokir aksi, "
+                "proses gagal atau tidak diotorisasi.\n")
+        for o in rows:
+            combo = "\n".join(f"- {ln.strip()}" for ln in (o.get("data_text") or "").splitlines() if ln.strip())
+            prompt = (head + f"\nSatu baris decision table [{title}]:\n{combo}\n\n"
+                      "Kerjakan bertahap:\n"
+                      "1. langkah: untuk SETIAP kondisi tulis aturan PRD yang berlaku untuk nilainya. Kondisi yang tidak "
+                      "berpengaruh pada kombinasi ini (mis. status X saat X tidak dipakai) tulis \"tidak berpengaruh\".\n"
+                      "2. keputusan: DIPROSES atau DITOLAK, dari gabungan langkah di atas.\n"
+                      "3. expected: SATU kalimat Bahasa Indonesia berisi hasil konkret (biaya, diskon, status) dengan istilah "
+                      "dan angka persis dari PRD. Jangan menyalin kalimat PRD berbahasa Inggris.\n"
+                      'FORMAT: {"langkah":["..."],"keputusan":"DIPROSES","expected":"..."}')
+            for attempt in range(2):
+                data = llm.chat_json(model, DT_SYSTEM, prompt, temperature=0.0, num_predict=500)
+                if not isinstance(data, dict):
+                    continue
+                dec = str(data.get("keputusan", "")).strip().upper()
+                exp = re.sub(r"^(berhasil|gagal)[.,:]?\s*", "", str(data.get("expected", "")).strip().rstrip("."), flags=re.I)
+                if dec not in ("DIPROSES", "DITOLAK") or len(exp) < 8 or looks_english(exp) or \
+                        re.search(r"tetap konsisten|sesuai (aturan|ketentuan)", exp, re.I):
+                    prompt += "\nPERHATIAN: jawaban sebelumnya tidak valid. expected WAJIB Bahasa Indonesia dan konkret."
+                    continue
+                hasil = "Berhasil" if dec == "DIPROSES" else "Gagal"
+                o["expect_text"] = f"{hasil}. {exp[:1].upper()}{exp[1:]}."
+                o["related_rules"] = rules[:12]
+                n += 1
+                break
+    return n
+
+
 def test_designer_node(state: dict) -> dict:
     atoms = state.get("atoms", [])
+    filled = infer_decision_values(atoms, state.get("prd_context", ""))
+    if filled:
+        ui.event("designer", f"{filled} kondisi decision table dianalisis dari isi PRD (nilai uji, nilai normal, nilai yang pasti ditolak)")
     st = state.get("prd_structure") or {}
     titles = {it["id"]: it["title"] for it in st.get("items", []) if it.get("type") in ("FR", "NFR")} or None
     obs = design_obligations(atoms, state.get("hints", {}), st.get("module_name") or "General", titles)
+    outcomes = infer_decision_outcomes(obs, state.get("prd_context", ""), atoms)
+    if outcomes:
+        ui.event("designer", f"{outcomes} baris decision table: hasil yang diharapkan dianalisis dari isi PRD")
     by_tech: Dict[str, int] = {}
     for o in obs:
         by_tech[o["technique"]] = by_tech.get(o["technique"], 0) + 1

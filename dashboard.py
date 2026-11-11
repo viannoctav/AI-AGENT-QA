@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dashboard lokal AI QA Generator.
+Dashboard lokal Tera - Asisten QA berbasis AI.
 
 Jalankan:   python dashboard.py
 Lalu buka:  http://127.0.0.1:8765  (terbuka otomatis)
@@ -185,19 +185,77 @@ def list_runs():
     for d in RUNS.iterdir():
         info = read_json(d / "run.json") if d.is_dir() else None
         if info:
+            if info.get("finished") and "active_sec" not in info and (d / "events.jsonl").exists():
+                info["active_sec"], info["paused_sec"] = active_seconds(d / "events.jsonl")  # riwayat lama
+                try:
+                    write_json(d / "run.json", info)
+                except Exception:
+                    pass
             runs.append(info)
     runs.sort(key=lambda r: r.get("started") or r.get("finished") or 0, reverse=True)
     return runs
 
 
+# kolom Excel -> kunci test case (hasil lama yang JSON-nya belum menyimpan daftar test case)
+_XLS_COLS = {
+    "tc no.": "tc_no", "module/menu": "module", "sub module/menu": "sub_label", "test case type": "category",
+    "test case": "title", "pre-condition": "preconditions", "test steps": "steps", "test data": "test_data",
+    "expected result": "expected_result", "requirement id": "requirement_ids", "technique": "technique",
+    "priority": "priority", "obligation id": "ob_id", "review flag": "review_flag",
+}
+_XLS_CACHE = {}
+
+
+def tcs_from_excel(path):
+    """Baca sheet TEST CASES dari Excel hasil generator. Baris judul kelompok (bukan TC-xxx) dilewati."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    key = (str(path), path.stat().st_mtime)
+    if key in _XLS_CACHE:
+        return _XLS_CACHE[key]
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        ws = wb["TEST CASES"] if "TEST CASES" in wb.sheetnames else wb.worksheets[0]
+        cols, out = None, []
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if v is None else str(v).strip() for v in row]
+            if cols is None:
+                low = [c.lower() for c in cells]
+                if "tc no." in low:
+                    cols = {i: _XLS_COLS[c] for i, c in enumerate(low) if c in _XLS_COLS}
+                continue
+            t = {k: cells[i] if i < len(cells) else "" for i, k in cols.items()}
+            if not re.match(r"^[A-Z]+-\d+", t.get("tc_no", "")):
+                continue
+            t["requirement_ids"] = [x.strip() for x in t.get("requirement_ids", "").split(",") if x.strip()]
+            for k in ("preconditions", "steps", "test_data"):
+                if t.get(k) == "-":
+                    t[k] = ""
+            out.append(t)
+        wb.close()
+    except Exception:
+        traceback.print_exc()
+        out = []
+    _XLS_CACHE.clear()
+    _XLS_CACHE[key] = out
+    return out
+
+
+def _art_and_tcs(run_id):
+    d = run_dir(run_id)
+    art = read_json(d / "artifacts.json", {}) or {}
+    tcs = art.get("tcs") or tcs_from_excel(d / "test_cases.xlsx")
+    return art, tcs
+
+
 def run_tcs(run_id):
-    art = read_json(run_dir(run_id) / "artifacts.json", {}) or {}
-    return art.get("tcs", [])
+    return _art_and_tcs(run_id)[1]
 
 
 def run_review(run_id):
-    art = read_json(run_dir(run_id) / "artifacts.json", {}) or {}
-    tcs = art.get("tcs", [])
+    art, tcs = _art_and_tcs(run_id)
     obs = {o.get("ob_id"): o for o in art.get("obligations", [])}
     return {
         "tcs": [t for t in tcs if t.get("review_flag")],
@@ -237,12 +295,126 @@ def import_outputs(verbose=True):
             "prd_title": prd_title(prd_file) if prd_file.exists() else stem.replace("_", " "),
             "status": "selesai", "started": None, "finished": art.stat().st_mtime,
             "imported": True, "models": {}, "overrides": {}, "progress": {},
-            "report": data.get("report", {}), "has_tcs": bool(data.get("tcs")),
+            "report": data.get("report", {}), "has_tcs": bool(data.get("tcs")) or bool(excel),
         })
         count += 1
         if verbose:
             print("diimpor:", run_id)
     return count
+
+
+JUDGE_SEC_DEFAULT = 22      # hanya bila belum ada riwayat: detik per test case untuk AI pemeriksa di akhir
+HEAVY_SLOWER_DEFAULT = 2.5  # hanya bila belum ada riwayat: model kasus rumit dibanding model penulis utama
+
+
+IDLE_GAP = 900  # jeda tanpa kabar > 15 menit = laptop tidur/terhenti, tidak dihitung sebagai waktu kerja
+
+
+def active_clock(times):
+    """Waktu kejadian -> waktu kerja kumulatif (jeda > IDLE_GAP dibuang). Panjang list sama."""
+    out, acc, prev = [], 0.0, None
+    for t in times:
+        if prev is not None:
+            dt = t - prev
+            acc += dt if 0 <= dt <= IDLE_GAP else 0
+        out.append(acc)
+        prev = t
+    return out
+
+
+def active_seconds(events_path):
+    """(waktu kerja, waktu terjeda) satu proses dari events.jsonl."""
+    try:
+        times = [json.loads(l).get("time") for l in Path(events_path).read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return None, None
+    times = [t for t in times if isinstance(t, (int, float))]
+    if len(times) < 2:
+        return None, None
+    act = active_clock(times)[-1]
+    return round(act), round(max(0, times[-1] - times[0] - act))
+
+
+def keep_awake(on):
+    """Windows: cegah laptop tidur otomatis selama proses berjalan (layar boleh mati). Tidak mencegah tutup laptop."""
+    try:
+        import ctypes
+        flags = 0x80000000 | (0x00000001 if on else 0)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+        ctypes.windll.kernel32.SetThreadExecutionState(flags)
+        return True
+    except Exception:
+        return False
+
+
+def learned_rates(exclude=None, last=3):
+    """Kecepatan nyata laptop ini dari riwayat proses (runs/*/events.jsonl), rata-rata beberapa proses terakhir:
+      judge_sec   = detik per test case di tahap AI pemeriksa akhir
+      heavy_ratio = berapa kali lebih lambat skenario rumit (model besar) dibanding skenario biasa
+    Belum ada riwayat -> nilai bawaan di atas."""
+    judge, heavy = [], []
+    for d in sorted((p for p in RUNS.iterdir() if p.is_dir() and p.name != exclude), reverse=True):
+        try:
+            ev = [json.loads(l) for l in (d / "events.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
+        except Exception:
+            continue
+        clock = dict(zip(map(id, ev), active_clock([e.get("time") or 0 for e in ev])))  # tanpa jeda laptop tidur
+        start = next((e for e in ev if e.get("type") == "stage" and str(e.get("detail", "")).startswith("AI pemeriksa memeriksa")), None)
+        marks = [e for e in ev if e.get("type") == "log" and e.get("tag") == "judge" and "diperiksa" in str(e.get("msg", ""))]
+        if start and marks:
+            m = re.search(r"diperiksa (\d+)/", marks[-1]["msg"])
+            span = clock[id(marks[-1])] - clock[id(start)]
+            if m and int(m.group(1)) and span > 0:
+                judge.append(span / int(m.group(1)))
+        hv = next((e for e in ev if e.get("type") == "log" and e.get("tag") == "designer"
+                   and re.search(r"(\d+) \(decision/edge\)", str(e.get("msg", "")))), None)
+        prog = [(clock[id(e)], e.get("done") or 0, e.get("total") or 0) for e in ev if e.get("type") == "progress"]
+        if hv and prog and prog[-1][1] >= prog[-1][2] > 0:
+            n_heavy = int(re.search(r"(\d+) \(decision/edge\)", hv["msg"]).group(1))
+            split = prog[-1][2] - n_heavy
+            t_split = next((t for t, dn, _ in prog if dn >= split), None)
+            if n_heavy and split > 0 and t_split and t_split > prog[0][0]:
+                light = (t_split - prog[0][0]) / split
+                heavy_rate = (prog[-1][0] - t_split) / n_heavy
+                if light > 0:
+                    heavy.append(heavy_rate / light)
+        if len(judge) >= last and len(heavy) >= last:
+            break
+    avg = lambda xs, dflt: sum(xs[:last]) / len(xs[:last]) if xs else dflt
+    return {"judge_sec": avg(judge, JUDGE_SEC_DEFAULT), "heavy_ratio": avg(heavy, HEAVY_SLOWER_DEFAULT)}
+
+
+RATES = {"judge_sec": JUDGE_SEC_DEFAULT, "heavy_ratio": HEAVY_SLOWER_DEFAULT}  # diperbarui di awal setiap proses
+
+
+def estimate_eta(samples, done, total, heavy=0, window=6):
+    """Sisa waktu (detik) dari kecepatan beberapa kelompok TERAKHIR, bukan sejak awal.
+    Waktu memuat model & membaca PRD tidak ikut dihitung (baru mulai dari event progress pertama).
+    Skenario rumit di akhir dihitung lebih lambat. None = belum cukup data."""
+    if not total or done >= total or len(samples) < 2:
+        return None
+    recent = samples[-window:]
+    (t0, d0), (t1, d1) = recent[0], recent[-1]
+    if d1 <= d0 or t1 <= t0:
+        return None
+    rate = (d1 - d0) / (t1 - t0)
+    remaining = total - done
+    light_left = max(0, total - heavy - done)
+    if light_left > 0:  # masih di fase model utama: sisa skenario rumit diperkirakan lebih lambat
+        return round((light_left + (remaining - light_left) * RATES["heavy_ratio"]) / rate)
+    return round(remaining / rate)
+
+
+def estimate_judge_eta(samples, window=4):
+    """Sisa waktu tahap AI pemeriksa dari kecepatan beberapa kelompok pemeriksaan terakhir."""
+    if len(samples) < 2:
+        t, x, y = samples[-1]
+        return round((y - x) * RATES["judge_sec"]) if y > x else None
+    (t0, x0, _), (t1, x1, y) = samples[-window:][0], samples[-1]
+    if x1 >= y:
+        return None
+    if x1 <= x0 or t1 <= t0:
+        return round((y - x1) * RATES["judge_sec"])
+    return round((y - x1) / ((x1 - x0) / (t1 - t0)))
 
 
 def _worker(run_id, prd_file, overrides):
@@ -255,16 +427,58 @@ def _worker(run_id, prd_file, overrides):
     info = read_json(d / "run.json")
     log = (d / "events.jsonl").open("a", encoding="utf-8")
     lock = threading.Lock()
+    samples = []          # (waktu, jumlah selesai) dari event progress -> kecepatan terbaru
+    try:
+        RATES.update(learned_rates(exclude=run_id))  # kecepatan nyata laptop ini dari proses sebelumnya
+    except Exception:
+        pass
+    heavy = {"n": 0}      # skenario rumit yang ditulis model besar di akhir (lebih lambat)
+    judge = {"planned": 0, "samples": []}  # AI pemeriksa di akhir: jumlah rencana + progres "diperiksa x/y"
+
+    wall = {"prev": None, "acc": 0.0}  # jam kerja: jeda laptop tidur tidak ikut menghitung kecepatan
+
+    def work_time(t):
+        if wall["prev"] is not None and 0 <= t - wall["prev"] <= IDLE_GAP:
+            wall["acc"] += t - wall["prev"]
+        wall["prev"] = t
+        return wall["acc"]
 
     def on_event(e):
         with lock:
+            wt = work_time(e.get("time") or time.time())
+            if e.get("type") == "log" and e.get("tag") == "designer":
+                m = re.search(r"(\d+) \(decision/edge\)", str(e.get("msg", "")))
+                if m:
+                    heavy["n"] = int(m.group(1))
+                m = re.search(r"judge_planned=(\d+)", str(e.get("msg", "")))
+                if m:
+                    judge["planned"] = int(m.group(1))
+            if e.get("type") == "log" and e.get("tag") == "judge":
+                m = re.search(r"diperiksa (\d+)/(\d+)", str(e.get("msg", "")))
+                if m:
+                    judge["samples"].append((wt, int(m.group(1)), int(m.group(2))))
+                    eta = estimate_judge_eta(judge["samples"])
+                    if eta is not None:
+                        info["progress"].update(eta=eta, eta_at=e.get("time"), phase="pemeriksaan")
+                        write_json(d / "run.json", info)
+                        e["eta"] = eta
+            if e.get("type") == "progress":
+                samples.append((wt, e.get("done") or 0))
+                e["eta"] = estimate_eta(samples, e.get("done") or 0, e.get("total") or 0, heavy["n"])
+                if judge["planned"] and not judge["samples"]:  # pemeriksaan di akhir ikut dihitung
+                    if e["eta"] is not None:
+                        e["eta"] += round(judge["planned"] * RATES["judge_sec"])
+                    elif (e.get("done") or 0) >= (e.get("total") or 1):
+                        e["eta"] = round(judge["planned"] * RATES["judge_sec"])
             log.write(json.dumps(e, ensure_ascii=False, default=str) + "\n")
             log.flush()
             if e.get("type") == "progress":
-                info["progress"] = {k: e.get(k) for k in ("done", "total", "retry", "dropped", "judged", "sources")}
+                info["progress"] = {k: e.get(k) for k in ("done", "total", "retry", "dropped", "judged", "sources", "eta")}
+                info["progress"]["eta_at"] = e.get("time")
                 write_json(d / "run.json", info)
 
     try:
+        info["keep_awake"] = keep_awake(True)
         llm.set_overrides(overrides)
         info["models"] = {"gen": llm.generation_model(), "auto": llm.auto_model(),
                           "judge": llm.judge_model() if llm.settings().get("judge_enabled", True) else ""}
@@ -279,7 +493,14 @@ def _worker(run_id, prd_file, overrides):
         if excel:
             excel[-1].replace(d / "test_cases.xlsx")
             OUTPUTS.mkdir(exist_ok=True)
-            shutil.copy(d / "test_cases.xlsx", OUTPUTS / f"{Path(prd_file).stem}_test_cases_v2.xlsx")
+            target = OUTPUTS / f"{Path(prd_file).stem}_test_cases_v2.xlsx"
+            try:
+                shutil.copy(d / "test_cases.xlsx", target)
+                if (d / "artifacts.json").exists():  # pasangan Excel + JSON di outputs tetap dari proses yang sama
+                    shutil.copy(d / "artifacts.json", OUTPUTS / f"{Path(prd_file).stem}_artifacts.json")
+            except OSError as e:  # mis. file lama sedang dibuka di Excel -> hasil tetap aman di folder runs
+                on_event({"type": "log", "time": time.time(), "tag": "export",
+                          "msg": f"gagal menyalin ke {target.name} (tutup file itu di Excel): {e}", "style": "yellow"})
         info.update(status="selesai", report=final.get("report") or final.get("v2_report") or {}, has_tcs=True)
         on_event({"type": "done", "time": time.time(), "report": info["report"]})
     except RunCancelled:
@@ -290,7 +511,10 @@ def _worker(run_id, prd_file, overrides):
         traceback.print_exc()
         on_event({"type": "error", "time": time.time(), "message": str(e)})
     finally:
+        keep_awake(False)
         info["finished"] = time.time()
+        log.flush()
+        info["active_sec"], info["paused_sec"] = active_seconds(d / "events.jsonl")
         write_json(d / "run.json", info)
         try:
             ui.unsubscribe(on_event)
@@ -302,6 +526,8 @@ def _worker(run_id, prd_file, overrides):
 
 
 def start_run(body):
+    if NOTES["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD dari catatan masih berjalan. Tunggu sampai selesai.")
     prd = Path(str(body.get("prd") or "")).name
     cap = body.get("cap")
     if cap not in (None, ""):
@@ -403,13 +629,6 @@ def models_info():
                        ("Kasus rumit", "auto_model")):
         if cfg.get(key):
             use.setdefault(cfg[key], []).append(label)
-    from tools.ai_config import ollama_settings
-    try:
-        emb = ollama_settings().get("embedding_model")
-    except Exception:
-        emb = None
-    if emb:
-        use.setdefault(emb, []).append("Mencari contoh test case perusahaan")
     models = ollama_models()
     return {"ollama": models is not None,
             "models": [{**m, "use": use.get(m["name"]) or use.get(m["name"].replace(":latest", "")) or []}
@@ -432,6 +651,143 @@ def overview():
 
 
 # ----------------------------------------------------------------------------- HTTP
+# ----------------------------------------------------------------------------- catatan QA -> PRD
+NOTES = {"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None}
+_NOTES_FILE = re.compile(r"^[A-Za-z0-9_.-]+_dari_catatan(?:_v\d+)?\.md$")
+
+
+def _notes_worker(text, name):
+    from free_text_to_prd.pipeline import run as notes_run
+    try:
+        res = notes_run(text, name=name, source_name=f"{name} (ditempel di dashboard)",
+                        cb=lambda m: NOTES["log"].append({"time": time.time(), "msg": m}))
+        doc = res["document"]
+        NOTES["result"] = {
+            "prd_file": Path(res["prd_path"]).name, "markdown": res["markdown"],
+            "review_file": Path(res["review_path"]).name, "id": res["id"],
+            "questions": doc["questions"], "missed_lines": doc["missed_lines"],
+            "rejected": [{"pernyataan": r.get("pernyataan"), "kutipan": r.get("kutipan"), "alasan": r.get("alasan")}
+                         for r in res["rejected"]],
+            "features": len(doc["features"]), "rules": sum(len(f["rules"]) for f in doc["features"]),
+        }
+        NOTES["status"] = "selesai"
+    except Exception as e:
+        traceback.print_exc()
+        NOTES["error"] = str(e)
+        NOTES["status"] = "gagal"
+    finally:
+        NOTES["finished"] = time.time()
+        keep_awake(False)
+
+
+def start_notes(body):
+    text = str(body.get("text") or "")
+    name = re.sub(r"\s+", " ", str(body.get("name") or "")).strip()[:80]
+    if len(text.strip()) < 20:
+        raise ApiError(400, "Catatan terlalu pendek. Tempel catatan QA lengkapnya.")
+    if len(text) > 200_000:
+        raise ApiError(400, "Catatan terlalu panjang (maksimal sekitar 200 ribu karakter).")
+    if not name:
+        raise ApiError(400, "Isi nama modul, misalnya \"Berita Acara\".")
+    if ACTIVE["id"]:
+        raise ApiError(409, "Masih ada proses pembuatan test case yang berjalan. Tunggu sampai selesai.")
+    if NOTES["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD sebelumnya masih berjalan.")
+    if ollama_models() is None:
+        raise ApiError(503, "AI lokal (Ollama) belum menyala.")
+    NOTES.update({"status": "berjalan", "log": [], "result": None, "error": None,
+                  "started": time.time(), "finished": None, "name": name})
+    def go():
+        keep_awake(True)
+        _notes_worker(text, name)
+    threading.Thread(target=go, daemon=True).start()
+    return {"ok": True}
+
+
+CONV_DIR = ROOT / "outputs" / "free_text_to_prd"
+
+
+def _conv_dir(cid):
+    d = CONV_DIR / Path(cid).name
+    if not cid or not (d / "analysis_metadata.json").is_file():
+        raise ApiError(404, "Hasil konversi tidak ditemukan")
+    return d
+
+
+def list_conversions():
+    out = []
+    if CONV_DIR.is_dir():
+        for d in CONV_DIR.iterdir():
+            meta = read_json(d / "analysis_metadata.json") if d.is_dir() else None
+            if not meta or not meta.get("prd_file"):
+                continue
+            meta["id"] = d.name
+            meta["prd_exists"] = (PRD_DIR / meta["prd_file"]).is_file()
+            meta.setdefault("time", (d / "analysis_metadata.json").stat().st_mtime)
+            out.append(meta)
+    return sorted(out, key=lambda m: m.get("time") or 0, reverse=True)
+
+
+def conversion_file(cid, kind):
+    d = _conv_dir(cid)
+    meta = read_json(d / "analysis_metadata.json") or {}
+    if kind == "prd":
+        f = PRD_DIR / Path(meta.get("prd_file", "")).name
+        if not f.is_file():  # PRD sudah dihapus dari daftar -> salinan di folder konversi
+            f = d / "prd" / Path(meta.get("prd_file", "")).name
+    else:
+        f = d / Path(meta.get("review_file", "")).name
+        if not f.is_file() or f.suffix != ".pdf":  # konversi lama: buat PDF dari catatan review
+            from free_text_to_prd.pdf import markdown_to_pdf
+            src = next((p for p in [d / "intermediate" / "catatan_review.md", *d.glob("*_catatan_review.md")] if p.is_file()), None)
+            if not src:
+                raise ApiError(404, "Catatan review tidak ditemukan")
+            f = d / (Path(meta.get("prd_file", "catatan")).stem + "_catatan_review.pdf")
+            f.write_bytes(markdown_to_pdf(src.read_text(encoding="utf-8"), f"Catatan Review - {meta.get('module', '')}"))
+    if not f.is_file():
+        raise ApiError(404, "File tidak ditemukan")
+    return f
+
+
+def delete_conversion(cid):
+    if NOTES["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD masih berjalan")
+    d = _conv_dir(cid)
+    meta = read_json(d / "analysis_metadata.json") or {}
+    prd = PRD_DIR / Path(meta.get("prd_file", "")).name
+    if _NOTES_FILE.match(prd.name) and prd.is_file():
+        prd.unlink()
+    shutil.rmtree(d, ignore_errors=True)
+    if (NOTES.get("result") or {}).get("id") == cid:
+        reset_notes()
+    return {"ok": True}
+
+
+def reset_notes():
+    if NOTES["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD masih berjalan")
+    NOTES.update({"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None})
+    return {"ok": True}
+
+
+def read_prd(name):
+    f = PRD_DIR / Path(name).name
+    if not f.is_file() or f.suffix.lower() != ".md":
+        raise ApiError(404, "PRD tidak ditemukan")
+    return {"file": f.name, "content": f.read_text(encoding="utf-8"), "editable": bool(_NOTES_FILE.match(f.name))}
+
+
+def save_prd(name, body):
+    f = PRD_DIR / Path(name).name
+    if not _NOTES_FILE.match(f.name) or not f.is_file():
+        raise ApiError(403, "Hanya PRD hasil penyusunan catatan yang bisa diubah dari dashboard.")
+    content = body.get("content")
+    if not isinstance(content, str) or len(content.strip()) < 20:
+        raise ApiError(400, "Isi PRD kosong")
+    f.write_text(content.replace("\r\n", "\n"), encoding="utf-8")
+    return {"file": f.name, "title": prd_title(f)}
+
+
 ROUTES = []
 
 
@@ -456,6 +812,13 @@ route("POST", "/api/runs/(?P<run_id>[^/]+)/cancel")(lambda h, q, run_id: cancel_
 route("GET", "/api/config")(lambda h, q: get_config())
 route("PUT", "/api/config")(lambda h, q: put_config(h.json_body()))
 route("GET", "/api/models")(lambda h, q: models_info())
+route("GET", "/api/notes")(lambda h, q: NOTES)
+route("POST", "/api/notes/reset")(lambda h, q: reset_notes())
+route("GET", "/api/conversions")(lambda h, q: list_conversions())
+route("DELETE", "/api/conversions/(?P<cid>[^/]+)")(lambda h, q, cid: delete_conversion(unquote(cid)))
+route("POST", "/api/notes")(lambda h, q: start_notes(h.json_body()))
+route("GET", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: read_prd(unquote(name)))
+route("PUT", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: save_prd(unquote(name), h.json_body()))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -515,6 +878,10 @@ class Handler(BaseHTTPRequestHandler):
                 info = read_json(d / "run.json", {})
                 stem = Path(info.get("prd", "hasil")).stem
                 return self.send_file(f, f"{stem}_{m.group(2)}")
+            m = re.fullmatch(r"/api/conversions/([^/]+)/(review|prd)", path)
+            if method == "GET" and m:
+                f = conversion_file(unquote(m.group(1)), m.group(2))
+                return self.send_file(f, f.name)
             if path.startswith("/api/"):
                 for meth, rx, fn in ROUTES:
                     mm = rx.match(path)
@@ -602,6 +969,18 @@ class Handler(BaseHTTPRequestHandler):
         self.handle_any("DELETE")
 
 
+class QuietServer(ThreadingHTTPServer):
+    """Browser sering menutup koneksi cadangan yang belum terpakai (WinError 10053/10054).
+    Itu normal dan tidak memengaruhi proses, jadi tidak perlu dicetak sebagai error."""
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        err = sys.exc_info()[1]
+        if isinstance(err, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def recover_stale_runs():
     """Run yang tertulis 'berjalan' padahal server baru dinyalakan = terputus saat server mati."""
     for d in RUNS.iterdir():
@@ -613,7 +992,7 @@ def recover_stale_runs():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Dashboard lokal AI QA Generator")
+    ap = argparse.ArgumentParser(description="Tera - Asisten QA berbasis AI (dashboard lokal)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--import-outputs", action="store_true")
@@ -627,10 +1006,9 @@ def main():
     if not any(RUNS.iterdir()):
         import_outputs(verbose=False)
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    server.daemon_threads = True
+    server = QuietServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}"
-    print(f"Dashboard berjalan di {url}")
+    print(f"Tera berjalan di {url}")
     print("Biarkan jendela ini terbuka selama dashboard dipakai. Tekan Ctrl+C untuk menutup.")
     if not args.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()

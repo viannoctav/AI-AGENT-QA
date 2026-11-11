@@ -106,6 +106,27 @@ def validate_no_hallucinated_features(
     return True, ""
 
 
+_ACRONYM = re.compile(r"\b[A-Z][A-Z0-9]{1,5}\b")
+_TECH_ACRONYM = {"ID", "OK", "URL", "API", "PDF", "JPG", "JPEG", "PNG", "CSV", "XLSX", "UI", "QA", "HTTP", "HTTPS", "IP",
+                 "MB", "KB", "GB", "WIB", "AM", "PM", "NA", "N/A"}
+
+
+def foreign_acronyms(test_case: Dict, prd_context: str = "") -> List[str]:
+    """Singkatan HURUF BESAR (mis. MFA, OTP, SKU) yang dipakai TC tetapi TIDAK ada di PRD ini -> kemungkinan istilah
+    bocoran dari PRD/proyek lain. Nilai uji yang diketik QA (bagian setelah ':' di Test Data, teks berkutip) diabaikan."""
+    if not prd_context:
+        return []
+    prd_tokens = {t.upper() for t in re.findall(r"\b[A-Za-z0-9]+\b", prd_context)}
+    td_values = " ".join(l.split(":", 1)[1] for l in str(test_case.get("test_data") or "").splitlines() if ":" in l)
+    text = " ".join([_tc_text(test_case), str(test_case.get("test_data") or "")])
+    text = re.sub(r"['\"\u201c\u2018][^'\"\u201d\u2019]{1,60}['\"\u201d\u2019]", " ", text)
+    values = set(_ACRONYM.findall(td_values))
+    out = sorted({t for t in _ACRONYM.findall(text)
+                  if t not in prd_tokens and t not in _TECH_ACRONYM and t not in values and not t.isdigit()
+                  and not re.fullmatch(r"(FR|NFR|BR|AC|TC|OB)\d*", t)})
+    return out
+
+
 def validate_no_invented_states(test_case: Dict, prd_context: str = "") -> Tuple[bool, str]:
     """Tolak status/state berhuruf besar yang tidak ada di PRD (mis. 'TIDAK DIPROSES')."""
     if not prd_context:
@@ -113,7 +134,12 @@ def validate_no_invented_states(test_case: Dict, prd_context: str = "") -> Tuple
 
     prd_caps = set(_CAPS_RE.findall(prd_context))
     used = set(_CAPS_RE.findall(_tc_text(test_case)))
-    invented = sorted(t for t in used if t not in prd_caps and t not in _COMMON_CAPS)
+    # nilai yang DIINPUT QA (Test Data, teks berkutip, "dengan ABCDE") adalah data uji, bukan nama status
+    data_src = " ".join([str(test_case.get("test_data") or "")] +
+                        re.findall(r"['\"\u201c\u2018]([^'\"\u201d\u2019]{1,60})['\"\u201d\u2019]", _tc_text(test_case)) +
+                        re.findall(r"\b(?:dengan|nilai|isi|masukkan|ketik|input)\s+([A-Z][A-Z_]{3,})\b", _tc_text(test_case), re.I))
+    data_caps = set(_CAPS_RE.findall(data_src))
+    invented = sorted(t for t in used if t not in prd_caps and t not in _COMMON_CAPS and t not in data_caps)
 
     if invented:
         return False, f"TC contains status/state not in PRD: {invented}"
@@ -217,9 +243,10 @@ def fix_preconditions(tc: Dict) -> bool:
         return False
     if _FLOW_SKIP.search(title):
         return False
-    if re.search(r"\bregist|\bdaftar", title):
+    # hanya test case yang MENGUJI login/registrasi itu sendiri (bukan "daftar pengajuan" atau "data masuk")
+    if re.search(r"\bregist(rasi|er|ration)?\b|pendaftaran akun|daftar akun|\bsign ?up\b|membuat akun baru", title):
         tc["preconditions"] = "User belum login dan belum memiliki akun"
-    elif re.search(r"\blogin\b|\bmasuk\b", title):
+    elif re.search(r"\b(login|log in|sign ?in)\b|masuk ke (akun|aplikasi|sistem)", title):
         tc["preconditions"] = "User sudah memiliki akun terdaftar dan belum login"
     else:
         return False

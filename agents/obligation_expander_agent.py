@@ -65,22 +65,55 @@ def _format_ob(ob: Dict[str, Any], feedback: Optional[str]) -> str:
     return "\n".join(lines)
 
 
+def _prompt_examples(batch: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Contoh di instruksi dibangun dari obligation yang sedang ditulis (nama fitur/field/status dari PRD ini),
+    supaya istilah dari PRD lain tidak terbawa ke test case."""
+    feat = next((o.get("sub_label") for o in batch if o.get("sub_label") not in (None, "", "-")), None) \
+        or (batch[0].get("module") if batch else None) or "fitur"
+    field = None
+    for o in batch:
+        m = re.match(r"\s*([^:\n]{2,40}):", o.get("data_text") or "")
+        if m:
+            field = m.group(1).strip()
+            break
+    field = field or feat
+    state = None
+    for o in batch:
+        m = re.search(r"State awal\s*=\s*([A-Z_]+)", o.get("precondition") or "")
+        if m:
+            state = m.group(1)
+            break
+    return {
+        "pre": f"Membuka aplikasi dan login dengan akun yang sesuai; berada di halaman yang memuat {feat}",
+        "field": f'["Isi field {field} dengan nilai pada Test Data", "Isi field wajib lainnya dengan data valid", "Klik tombol Simpan"]',
+        "wait": '["Lakukan aksi yang memulai batas waktu", "Tunggu sesuai durasi di Langkah wajib", "Lanjutkan aksi berikutnya", "Klik tombol pemicu"]',
+        "state": f'["Buka detail data berstatus {state or "<status awal>"}", "Klik tombol aksi yang mengubah status", "Klik Ya pada konfirmasi"]',
+        "dt": '["Pilih/isi setiap kondisi sesuai Test Data", "Klik tombol pemicu proses"]',
+        "td": f'"{field}: <nilai>"',
+    }
+
+
 def build_prompt(batch: List[Dict[str, Any]], hints: Dict[str, str], feedback: Dict[str, str]) -> str:
     hint_txt = "\n".join(f"- {k}: {v}" for k, v in (hints or {}).items()) or "-"
+    ex = _prompt_examples(batch)
     blocks = "\n\n".join(_format_ob(ob, feedback.get(ob["ob_id"])) for ob in batch)
     style_txt = _style_examples(batch)
     return f"""Tulis SATU test case untuk SETIAP obligation di bawah (jumlah test case = {len(batch)}).
 
 ATURAN WAJIB:
 1. Kembalikan ob_id persis sama. Jangan menambah/menghapus obligation.
-2. title: diawali "Verifikasi", maksimal 120 karakter, Bahasa Indonesia (terjemahkan aturan berbahasa Inggris, jangan menyalin kalimatnya), idealnya <= 80 karakter, menyebut objek/fitur spesifik (mis. "kode OTP SMS", "token reset password"). Hanya memakai angka yang ada di Skenario. Jangan tulis ID requirement, nomor telepon, email, atau kode di judul.
-3. preconditions = PERSIAPAN yang dilakukan SEBELUM steps dan biasanya sama untuk banyak test case: membuka aplikasi/URL, login dengan akun yang sesuai (JANGAN login untuk test case login/registrasi), menuju halaman fitur, dan keadaan akun/data yang dibutuhkan. Contoh: "Membuka aplikasi dan login dengan akun yang MFA-nya aktif; berada di halaman Pengaturan Keamanan". JANGAN memuat nilai uji (email/password/kode/nomor yang diuji) dan JANGAN bertentangan dengan tujuan test case. DILARANG frasa generik seperti "kondisi awal sistem sesuai skenario".
-4. steps = daftar 2-8 langkah uji (array string) yang dilakukan QA SETELAH preconditions, berupa kalimat perintah: "Isi field Email dengan nilai pada Test Data", "Klik tombol Masuk", "Tunggu 3 menit 1 detik". Langkah terakhir adalah aksi yang memicu hasil; JANGAN menulis hasil yang diharapkan di steps dan JANGAN mengulang preconditions. Nama tombol/halaman boleh disimpulkan secara wajar bila PRD tidak menyebutnya. Jika ada "Langkah wajib", isinya (termasuk angka) harus tertulis di steps.
-5. test_data = HANYA nilai yang diinput atau dipilih QA (email, password, kode OTP, nomor telepon, pilihan dropdown), satu per baris "Label: nilai". Waktu tunggu, jumlah percobaan, urutan aksi, dan keadaan akun BUKAN test data (masukkan ke steps/preconditions). Jika sudah ada "Nilai uji", isi test_data dengan "" (nilainya dipakai otomatis). Jika memang tidak ada yang diinput, isi "-".
+2. title: diawali "Verifikasi", maksimal 120 karakter, Bahasa Indonesia (terjemahkan aturan berbahasa Inggris, jangan menyalin kalimatnya), idealnya <= 80 karakter, menyebut objek/fitur spesifik dari PRD. Hanya memakai angka yang ada di Skenario. Jangan tulis ID requirement, nomor telepon, email, atau kode di judul.
+3. preconditions = PERSIAPAN yang dilakukan SEBELUM steps dan biasanya sama untuk banyak test case: membuka aplikasi/URL, login dengan akun yang sesuai (JANGAN login untuk test case login/registrasi), menuju halaman fitur, dan keadaan akun/data yang dibutuhkan. Contoh: "{ex['pre']}". JANGAN memuat nilai uji (email/password/kode/nomor yang diuji) dan JANGAN bertentangan dengan tujuan test case. DILARANG frasa generik seperti "kondisi awal sistem sesuai skenario".
+4. steps = 2-8 langkah uji (array string) yang dilakukan QA SETELAH preconditions, HANYA AKSI berupa kalimat perintah (isi, pilih, klik, tunggu, masukkan). DILARANG langkah verifikasi seperti "Pastikan...", "Verifikasi...", "Periksa...", "Amati..." (hasil hanya ditulis di expected_result), dan jangan mengulang preconditions. Langkah terakhir adalah aksi yang memicu hasil. Nama tombol/halaman boleh disimpulkan secara wajar bila PRD tidak menyebutnya. Jika ada "Langkah wajib", isinya (termasuk angka) harus tertulis di steps. Contoh:
+   - field input: {ex['field']}
+   - batas waktu: {ex['wait']}
+   - perubahan status: {ex['state']}
+   - decision table: {ex['dt']}
+5. test_data = HANYA nilai yang diinput atau dipilih QA (teks, angka, tanggal, email, pilihan dropdown, file yang diunggah), satu per baris "Nama field: nilai", dengan nama field persis seperti di PRD dan TIDAK diterjemahkan (mis. {ex['td']}), bukan label umum seperti "Nilai input". Nilai yang diketik/dipilih di steps (mis. 0, 'abc') WAJIB juga ditulis di test_data. Waktu tunggu, jumlah percobaan, urutan aksi, dan keadaan akun BUKAN test data (masukkan ke steps/preconditions). Jika sudah ada "Nilai uji", isi test_data dengan "" (nilainya dipakai otomatis). Jika memang tidak ada yang diinput, isi "-".
 6. expected_result: kalimat pertama diawali TEPAT "Berhasil" (polaritas Positive) atau "Gagal"/"Ditolak" (polaritas Negative). Untuk polaritas Auto, pilih berdasarkan Aturan PRD. Jangan mengarang pesan error; kutip pesan hanya jika ada di aturan.
 7. Jangan memakai angka/ambang yang tidak ada di Skenario, Langkah wajib, atau Aturan PRD.
-8. expected_result: hasil konkret yang bisa diamati (halaman tujuan, pesan/penolakan, perubahan state, data tersimpan/tidak). DILARANG frasa "sesuai deskripsi/aturan/requirement", "alur berhasil", atau hanya "Berhasil."/"Gagal.".
-9. Untuk penolakan, sebutkan APA yang terjadi dan ALASANNYA (mis. "Gagal. Sistem menolak token karena sudah kedaluwarsa dan tetap di halaman reset"). Jika PRD tidak menyebut teks pesan, cukup tulis "menampilkan pesan kesalahan" disertai alasan.
+8. expected_result: hasil konkret yang bisa diamati (halaman tujuan, pesan/penolakan, perubahan state, data tersimpan/tidak). Untuk decision table sebutkan status akhir yang terlihat (status/nilai yang tertulis di PRD). DILARANG frasa "sesuai deskripsi/aturan/requirement/ketentuan", "konsisten dengan kondisi awal", "alur berhasil", atau hanya "Berhasil."/"Gagal.".
+9. Untuk penolakan, sebutkan APA yang terjadi dan ALASANNYA (mis. "Gagal. Sistem menolak <data> karena <alasan sesuai aturan PRD> dan tetap di halaman yang sama"). Jika PRD tidak menyebut teks pesan, cukup tulis "menampilkan pesan kesalahan" disertai alasan.
 10. expected_result tidak boleh bertentangan: jika diawali "Berhasil" jangan memuat penolakan/gagal, dan sebaliknya.
 
 CONTOH DATA SINTETIS dari PRD:
@@ -168,6 +201,9 @@ def template_steps(ob: Dict[str, Any]) -> str:
     elif hint:
         if ob.get("data_text"):
             steps.append("Klik tombol untuk mengirim/menyimpan")
+        else:  # minimal 2 langkah: buka data/halaman dulu, lalu aksi wajibnya
+            m = re.search(r"State awal\s*=\s*([A-Z_]+)", ob.get("precondition") or "")
+            steps.append(f"Buka detail data berstatus {m.group(1)}" if m else "Lengkapi data sesuai Pre-condition dan Test Data")
         steps.append(hint)
     else:
         if not ob.get("data_text"):

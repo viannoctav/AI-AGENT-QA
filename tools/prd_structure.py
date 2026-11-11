@@ -118,10 +118,18 @@ def extract_decisions(lines: List[str]) -> List[Dict[str, Any]]:
                 words = parts[0].split()
                 name = " ".join(words[:-1]) if len(words) >= 2 else parts[0]
                 values = ([words[-1]] if len(words) >= 2 else [parts[0]]) + parts[1:]
-                conds.append({"name": name, "values": values if len(values) >= 2 else ["memenuhi", "tidak memenuhi"]})
+                conds.append({"name": name, "values": values if len(values) >= 2 else ["memenuhi", "tidak memenuhi"],
+                              **({} if len(values) >= 2 else {"no_values": True})})
             continue
         if 2 <= len(body) <= 60 and not body.endswith(":"):
-            conds.append({"name": body, "values": ["memenuhi / valid", "tidak memenuhi / invalid"]})
+            # PRD tidak menyebut nilainya -> diisi AI dari isi PRD (infer_decision_values), ini hanya cadangan
+            conds.append({"name": body, "values": ["memenuhi / valid", "tidak memenuhi / invalid"], "no_values": True})
+    # nama kondisi kembar dalam satu tabel ("Coupon present / absent" dan "Coupon active / expired") -> diberi
+    # pembeda dari nilainya, supaya Test Data dan analisis nilai tidak tertukar
+    names = [c["name"].lower() for c in conds]
+    for c in conds:
+        if names.count(c["name"].lower()) > 1 and not c.get("no_values"):
+            c["name"] = f"{c['name']} ({' / '.join(map(str, c['values']))})"
     return conds if len(conds) >= 2 else []
 
 

@@ -21,6 +21,8 @@ _GENERIC_EXPECTED = [re.compile(p, re.I) for p in (
     r"\balur\s+berhasil\b",
     r"perilaku\s+sistem\s+sesuai",
     r"sistem\s+berjalan\s+(dengan\s+)?(normal|baik)",
+    r"konsisten\s+dengan\s+kondisi\s+awal",
+    r"sesuai\s+(dengan\s+)?(ketentuan|aturan\s+sistem|kondisi\s+yang\s+berlaku)",
 )]
 _GENERIC_PRECOND = [re.compile(p, re.I) for p in (
     r"kondisi\s+awal\s+sistem",

@@ -701,13 +701,7 @@ ATURAN WAJIB
 
 11. Module harus berasal dari requirement yang sesuai.
 
-12. Jangan membawa domain lain seperti:
-    - login
-    - username
-    - password
-    - device
-    - library
-    - project lain
+12. Jangan membawa fitur, istilah, atau domain yang TIDAK tertulis di PRD ini (mis. dari proyek lain).
 
 13. FR = Functional.
 
