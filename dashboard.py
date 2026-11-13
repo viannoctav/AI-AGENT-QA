@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dashboard lokal Tera - Asisten QA berbasis AI.
+Dashboard lokal TƎRᗩ - Asisten QA berbasis AI.
 
 Jalankan:   python dashboard.py
 Lalu buka:  http://127.0.0.1:8765  (terbuka otomatis)
@@ -31,6 +31,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from tools import form_rules as FR  # noqa: E402  aturan validasi isian (sama dengan dashboard/app.js)
+
 STATIC = ROOT / "dashboard"
 RUNS = ROOT / "runs"
 PRD_DIR = ROOT / "knowledge" / "prd"
@@ -51,10 +53,11 @@ EDITABLE = {
 
 
 class ApiError(Exception):
-    def __init__(self, status, message):
+    def __init__(self, status, message, field=None):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.field = field  # id isian di dashboard yang salah, supaya error tampil tepat di bawahnya
 
 
 # ----------------------------------------------------------------------------- util
@@ -166,12 +169,13 @@ def upload_prd(body):
     name = Path(str(body.get("name") or "")).name
     content = body.get("content")
     if not name.lower().endswith(".md"):
-        raise ApiError(400, "File PRD harus berformat .md")
-    if not isinstance(content, str) or not content.strip():
-        raise ApiError(400, "Isi file kosong")
-    if len(content.encode("utf-8")) > 2_000_000:
-        raise ApiError(400, "File terlalu besar (maksimal 2 MB)")
+        raise ApiError(400, "File PRD harus berformat .md", "prd-file")
+    err = FR.prd_content_error(content)
+    if err:
+        raise ApiError(400, err, "prd-file")
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+    if not re.search(r"[A-Za-z0-9]", Path(name).stem):
+        raise ApiError(400, "Nama file PRD harus mengandung huruf atau angka.", "prd-file")
     target = PRD_DIR / name
     if target.exists():
         raise ApiError(409, f"Sudah ada PRD bernama {name}")
@@ -528,7 +532,13 @@ def _worker(run_id, prd_file, overrides):
 def start_run(body):
     if NOTES["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD dari catatan masih berjalan. Tunggu sampai selesai.")
+    if DESIGN["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD dari desain masih berjalan. Tunggu sampai selesai.")
     prd = Path(str(body.get("prd") or "")).name
+    if not prd:
+        raise ApiError(400, "Pilih dokumen PRD dulu.", "prd-select")
+    if not prd.lower().endswith(".md") or not (PRD_DIR / prd).is_file():
+        raise ApiError(400, "Dokumen PRD tidak ditemukan. Muat ulang halaman lalu pilih lagi.", "prd-select")
     cap = body.get("cap")
     if cap not in (None, ""):
         try:
@@ -603,6 +613,18 @@ def put_config(values):
     if data is None:
         raise ApiError(500, "configs/ai.json tidak bisa dibaca. Pulihkan dari configs/ai.json.bak")
     v2 = data.setdefault("v2", {})
+    if "generation_model" in values and not str(values.get("generation_model") or "").strip():
+        raise ApiError(400, "Pilih AI penulis test case.", "c-gen")
+    if "judge_model" in values and not str(values.get("judge_model") or "").strip():
+        raise ApiError(400, "Pilih AI pemeriksa.", "c-judge")
+    if str(values.get("auto_model") or "").strip() and "auto_model_kinds" in values and not values["auto_model_kinds"]:
+        raise ApiError(400, "AI kasus rumit dipilih, jadi centang minimal satu pemakaiannya.", "c-kinds")
+    fields = {"batch_size": "c-bs", "max_attempts": "c-ma", "max_obligations": "c-mo", "num_ctx": "c-ctx"}
+    for k, fid in fields.items():
+        if k in values:
+            err = FR.number_error(k, values[k])
+            if err:
+                raise ApiError(400, err, fid)
     for k, v in values.items():
         kind = EDITABLE.get(k)
         if kind is None:
@@ -653,7 +675,7 @@ def overview():
 # ----------------------------------------------------------------------------- HTTP
 # ----------------------------------------------------------------------------- catatan QA -> PRD
 NOTES = {"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None}
-_NOTES_FILE = re.compile(r"^[A-Za-z0-9_.-]+_dari_catatan(?:_v\d+)?\.md$")
+_NOTES_FILE = re.compile(r"^[A-Za-z0-9_.-]+_dari_(?:catatan|desain)(?:_v\d+)?\.md$")  # PRD hasil konversi
 
 
 def _notes_worker(text, name):
@@ -682,17 +704,20 @@ def _notes_worker(text, name):
 
 def start_notes(body):
     text = str(body.get("text") or "")
-    name = re.sub(r"\s+", " ", str(body.get("name") or "")).strip()[:80]
-    if len(text.strip()) < 20:
-        raise ApiError(400, "Catatan terlalu pendek. Tempel catatan QA lengkapnya.")
-    if len(text) > 200_000:
-        raise ApiError(400, "Catatan terlalu panjang (maksimal sekitar 200 ribu karakter).")
-    if not name:
-        raise ApiError(400, "Isi nama modul, misalnya \"Berita Acara\".")
+    raw_name = str(body.get("name") or "")
+    err = FR.name_error(raw_name)
+    if err:
+        raise ApiError(400, err, "nt-name")
+    err = FR.notes_error(text)
+    if err:
+        raise ApiError(400, err, "nt-text")
+    name = re.sub(r"\s+", " ", raw_name).strip()
     if ACTIVE["id"]:
         raise ApiError(409, "Masih ada proses pembuatan test case yang berjalan. Tunggu sampai selesai.")
     if NOTES["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD sebelumnya masih berjalan.")
+    if DESIGN["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD dari desain masih berjalan. Tunggu sampai selesai.")
     if ollama_models() is None:
         raise ApiError(503, "AI lokal (Ollama) belum menyala.")
     NOTES.update({"status": "berjalan", "log": [], "result": None, "error": None,
@@ -705,23 +730,29 @@ def start_notes(body):
 
 
 CONV_DIR = ROOT / "outputs" / "free_text_to_prd"
+DESIGN_DIR = ROOT / "outputs" / "design_to_prd"
+CONV_DIRS = {"catatan": CONV_DIR, "desain": DESIGN_DIR}
 
 
 def _conv_dir(cid):
-    d = CONV_DIR / Path(cid).name
-    if not cid or not (d / "analysis_metadata.json").is_file():
-        raise ApiError(404, "Hasil konversi tidak ditemukan")
-    return d
+    for base in CONV_DIRS.values():
+        d = base / Path(str(cid)).name
+        if cid and (d / "analysis_metadata.json").is_file():
+            return d
+    raise ApiError(404, "Hasil konversi tidak ditemukan")
 
 
 def list_conversions():
     out = []
-    if CONV_DIR.is_dir():
-        for d in CONV_DIR.iterdir():
+    for kind, base in CONV_DIRS.items():
+        if not base.is_dir():
+            continue
+        for d in base.iterdir():
             meta = read_json(d / "analysis_metadata.json") if d.is_dir() else None
             if not meta or not meta.get("prd_file"):
                 continue
             meta["id"] = d.name
+            meta["kind"] = meta.get("kind") or kind
             meta["prd_exists"] = (PRD_DIR / meta["prd_file"]).is_file()
             meta.setdefault("time", (d / "analysis_metadata.json").stat().st_mtime)
             out.append(meta)
@@ -750,7 +781,7 @@ def conversion_file(cid, kind):
 
 
 def delete_conversion(cid):
-    if NOTES["status"] == "berjalan":
+    if NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD masih berjalan")
     d = _conv_dir(cid)
     meta = read_json(d / "analysis_metadata.json") or {}
@@ -760,6 +791,8 @@ def delete_conversion(cid):
     shutil.rmtree(d, ignore_errors=True)
     if (NOTES.get("result") or {}).get("id") == cid:
         reset_notes()
+    if (DESIGN.get("result") or {}).get("id") == cid:
+        reset_design()
     return {"ok": True}
 
 
@@ -767,6 +800,176 @@ def reset_notes():
     if NOTES["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD masih berjalan")
     NOTES.update({"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None})
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------- desain (gambar) -> PRD
+DESIGN = {"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None, "progress": {}}
+UPLOADS = DESIGN_DIR / "_unggahan"
+_UPLOAD_ID = re.compile(r"^[a-f0-9]{24}\.(?:png|jpg|jpeg|webp)$")
+IMAGE_EXT = {"png", "jpg", "jpeg", "webp"}
+
+
+def ocr_available():
+    return sys.platform.startswith("win")
+
+
+def _clean_uploads(max_age=2 * 86400):
+    if UPLOADS.is_dir():
+        for f in UPLOADS.iterdir():
+            try:
+                if time.time() - f.stat().st_mtime > max_age:
+                    f.unlink()
+            except OSError:
+                pass
+
+
+def upload_design_image(body):
+    """Satu gambar per permintaan (base64). Dicek dengan Pillow, lalu dihitung jumlah layarnya untuk estimasi."""
+    import base64
+    import secrets
+    name = Path(str(body.get("name") or "gambar.png")).name[:120]
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    err = FR.image_name_error(name)
+    if err:
+        raise ApiError(400, err)
+    data = str(body.get("data") or "")
+    data = data.split(",", 1)[1] if data.startswith("data:") else data
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except Exception:
+        raise ApiError(400, f"{name}: gambar tidak terbaca.")
+    err = FR.image_size_error(name, len(raw))
+    if err:
+        raise ApiError(400, err)
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    _clean_uploads()
+    fid = f"{secrets.token_hex(12)}.{ext}"
+    f = UPLOADS / fid
+    f.write_bytes(raw)
+    try:
+        from design_to_prd.images import count_screens, load  # juga membuka batas ukuran gambar besar
+        from PIL import Image
+        with Image.open(f) as im:
+            im.verify()
+        size = load(f).size
+        err = FR.image_size_error(name, len(raw), *size)
+        if err:
+            raise ValueError(err)
+        screens = count_screens(f)
+    except ImportError as e:
+        f.unlink(missing_ok=True)
+        raise ApiError(500, f"Komponen pengolah gambar (Pillow) tidak ditemukan oleh Python yang menjalankan TƎRᗩ "
+                            f"({sys.executable}). Jalankan TƎRᗩ lewat Jalankan_Tera.bat, atau pasang dengan: "
+                            f"\"{sys.executable}\" -m pip install pillow. Detail: {e}")
+    except ValueError as e:
+        f.unlink(missing_ok=True)
+        raise ApiError(400, str(e) if str(e).startswith(name) else f"{name}: rusak atau bukan gambar.")
+    except Exception as e:
+        f.unlink(missing_ok=True)
+        raise ApiError(400, f"{name}: rusak atau bukan gambar ({type(e).__name__}).")
+    return {"id": fid, "name": name, "screens": screens, "width": size[0], "height": size[1]}
+
+
+def _design_worker(cards, extra, name):
+    from design_to_prd.pipeline import run as design_run
+    try:
+        res = design_run(cards, extra=extra, name=name, progress=DESIGN["progress"],
+                         cb=lambda m: DESIGN["log"].append({"time": time.time(), "msg": m}))
+        doc = res["document"]
+        DESIGN["result"] = {
+            "prd_file": Path(res["prd_path"]).name, "markdown": res["markdown"],
+            "review_file": Path(res["review_path"]).name, "id": res["id"], "kind": "desain",
+            "questions": doc["questions"],
+            "missed_lines": [{"baris": m["baris"], "teks": f"{m['teks']} (penjelasan {m['sumber']})"} for m in doc["missed_lines"]],
+            "rejected": [{"pernyataan": r.get("pernyataan"), "kutipan": r.get("kutipan"), "alasan": r.get("alasan")}
+                         for r in res["rejected"]],
+            "features": len(doc["features"]), "rules": sum(len(f["rules"]) for f in doc["features"]),
+            "stats": res["stats"],
+        }
+        DESIGN["status"] = "selesai"
+    except Exception as e:
+        traceback.print_exc()
+        DESIGN["error"] = str(e)
+        DESIGN["status"] = "gagal"
+    finally:
+        DESIGN["finished"] = time.time()
+        keep_awake(False)
+        for c in cards:  # gambar unggahan sudah disalin ke folder hasil
+            for im in c.get("images") or []:
+                Path(im["path"]).unlink(missing_ok=True)
+
+
+def start_design(body):
+    raw_name = str(body.get("name") or "")
+    err = FR.name_error(raw_name)
+    if err:
+        raise ApiError(400, err, "dz-name")
+    name = re.sub(r"\s+", " ", raw_name).strip()
+    extra = str(body.get("extra") or "")
+    err = FR.optional_text_error(extra, "Deskripsi tambahan")
+    if err:
+        raise ApiError(400, err, "dz-extra")
+    raw_cards = [c for c in (body.get("cards") or []) if isinstance(c, dict)]
+    names = [str(c.get("nama") or "") for c in raw_cards]
+    dups = set(FR.duplicate_names(names))
+    cards, used = [], set()
+    for i, c in enumerate(raw_cards, 1):
+        key = c.get("key", i)
+        teks = str(c.get("teks") or "")
+        nama = re.sub(r"\s+", " ", str(c.get("nama") or "")).strip()
+        has_img = bool(c.get("images"))
+        if not nama and not teks.strip() and not has_img:
+            continue  # kartu kosong diabaikan
+        err = FR.name_error(nama, f"Nama halaman / fitur ke-{i}")
+        if err:
+            raise ApiError(400, err, f"dn-{key}")
+        if i - 1 in dups:
+            raise ApiError(400, f"Nama halaman / fitur ke-{i} sama dengan halaman sebelumnya. Pakai nama yang berbeda.", f"dn-{key}")
+        err = FR.optional_text_error(teks, f"Penjelasan halaman ke-{i}")
+        if err:
+            raise ApiError(400, err, f"dt-{key}")
+        if not teks.strip() and not has_img:
+            raise ApiError(400, f"Halaman ke-{i} belum berisi gambar atau penjelasan. Tambahkan salah satunya, atau hapus kartu ini.", f"di-{key}")
+        images = []
+        for im in c.get("images") or []:
+            fid = Path(str((im or {}).get("id") or "")).name
+            if not _UPLOAD_ID.match(fid) or not (UPLOADS / fid).is_file():
+                raise ApiError(400, "Ada gambar yang belum selesai diunggah atau sudah kedaluwarsa. Tambahkan ulang gambarnya.")
+            nm = Path(str(im.get("name") or fid)).name
+            stem, ext, k = Path(nm).stem, Path(nm).suffix or "." + fid.rsplit(".", 1)[-1], 2
+            while nm.lower() in used:  # nama file kembar antar gambar -> diberi nomor
+                nm = f"{stem}_{k}{ext}"
+                k += 1
+            used.add(nm.lower())
+            images.append({"path": str(UPLOADS / fid), "name": nm})
+        cards.append({"nama": nama, "teks": teks, "images": images})
+    if not cards:
+        raise ApiError(400, "Isi minimal satu halaman/fitur dengan gambar atau penjelasan.", "dz-cards")
+    if sum(len(c["teks"]) for c in cards) + len(extra) > FR.DESIGN_TOTAL_MAX:
+        raise ApiError(400, "Total penjelasan terlalu panjang (maksimal 200.000 karakter).", "dz-extra")
+    if any(c["images"] for c in cards) and not ocr_available():
+        raise ApiError(400, "Membaca teks gambar memakai fitur bawaan Windows, jadi hanya bisa di laptop Windows.")
+    if ACTIVE["id"]:
+        raise ApiError(409, "Masih ada proses pembuatan test case yang berjalan. Tunggu sampai selesai.")
+    if NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan":
+        raise ApiError(409, "Masih ada penyusunan PRD yang berjalan. Tunggu sampai selesai.")
+    if ollama_models() is None:
+        raise ApiError(503, "AI lokal (Ollama) belum menyala.")
+    DESIGN.update({"status": "berjalan", "log": [], "result": None, "error": None, "progress": {},
+                   "started": time.time(), "finished": None, "name": name})
+
+    def go():
+        keep_awake(True)
+        _design_worker(cards, extra, name)
+    threading.Thread(target=go, daemon=True).start()
+    return {"ok": True}
+
+
+def reset_design():
+    if DESIGN["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD masih berjalan")
+    DESIGN.update({"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None})
     return {"ok": True}
 
 
@@ -780,10 +983,11 @@ def read_prd(name):
 def save_prd(name, body):
     f = PRD_DIR / Path(name).name
     if not _NOTES_FILE.match(f.name) or not f.is_file():
-        raise ApiError(403, "Hanya PRD hasil penyusunan catatan yang bisa diubah dari dashboard.")
+        raise ApiError(403, "Hanya PRD hasil konversi (catatan atau desain) yang bisa diubah dari dashboard.")
     content = body.get("content")
-    if not isinstance(content, str) or len(content.strip()) < 20:
-        raise ApiError(400, "Isi PRD kosong")
+    err = FR.prd_content_error(content)
+    if err:
+        raise ApiError(400, err, "nr-md")
     f.write_text(content.replace("\r\n", "\n"), encoding="utf-8")
     return {"file": f.name, "title": prd_title(f)}
 
@@ -817,6 +1021,10 @@ route("POST", "/api/notes/reset")(lambda h, q: reset_notes())
 route("GET", "/api/conversions")(lambda h, q: list_conversions())
 route("DELETE", "/api/conversions/(?P<cid>[^/]+)")(lambda h, q, cid: delete_conversion(unquote(cid)))
 route("POST", "/api/notes")(lambda h, q: start_notes(h.json_body()))
+route("GET", "/api/design")(lambda h, q: {**DESIGN, "now": time.time()})
+route("POST", "/api/design")(lambda h, q: start_design(h.json_body()))
+route("POST", "/api/design/reset")(lambda h, q: reset_design())
+route("POST", "/api/design/images")(lambda h, q: upload_design_image(h.json_body(limit=60_000_000)))
 route("GET", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: read_prd(unquote(name)))
 route("PUT", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: save_prd(unquote(name), h.json_body()))
 
@@ -828,10 +1036,10 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     # ---- helpers
-    def json_body(self):
+    def json_body(self, limit=3_000_000):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > 3_000_000:
-            raise ApiError(413, "Permintaan terlalu besar")
+        if n > limit:
+            raise ApiError(413, "Permintaan terlalu besar" + (" (gambar maksimal sekitar 40 MB)" if limit > 3_000_000 else ""))
         try:
             return json.loads(self.rfile.read(n).decode("utf-8") or "{}")
         except Exception:
@@ -892,7 +1100,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(405, "Metode tidak didukung")
             return self.serve_static(path)
         except ApiError as e:
-            self.send_json({"detail": e.message}, e.status)
+            self.send_json({"detail": e.message, **({"field": e.field} if e.field else {})}, e.status)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as e:
@@ -992,7 +1200,7 @@ def recover_stale_runs():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Tera - Asisten QA berbasis AI (dashboard lokal)")
+    ap = argparse.ArgumentParser(description="TƎRᗩ - Asisten QA berbasis AI (dashboard lokal)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--import-outputs", action="store_true")
@@ -1008,7 +1216,10 @@ def main():
 
     server = QuietServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}"
-    print(f"Tera berjalan di {url}")
+    try:
+        print(f"TƎRᗩ berjalan di {url}")
+    except UnicodeEncodeError:  # jendela lama yang tidak mendukung huruf khusus
+        print(f"TERA berjalan di {url}")
     print("Biarkan jendela ini terbuka selama dashboard dipakai. Tekan Ctrl+C untuk menutup.")
     if not args.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()

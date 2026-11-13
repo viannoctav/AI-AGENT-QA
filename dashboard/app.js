@@ -1,4 +1,4 @@
-/* Dashboard lokal Tera (Asisten QA berbasis AI) - semua layar dalam satu file.
+/* Dashboard lokal TƎRᗩ (Asisten QA berbasis AI) - semua layar dalam satu file.
    Data diambil dari dashboard.py lewat /api/...; progres live lewat Server-Sent Events. */
 "use strict";
 
@@ -26,8 +26,124 @@ async function api(path, opts = {}) {
   const r = await fetch(path, init);
   let data = null;
   try { data = await r.json(); } catch (e) { /* bukan JSON */ }
-  if (!r.ok) throw new Error((data && data.detail) || `Server menjawab ${r.status}`);
+  if (!r.ok) {
+    const err = new Error((data && data.detail) || `Server menjawab ${r.status}`);
+    err.field = data && data.field; // id isian yang salah (validasi server)
+    throw err;
+  }
   return data;
+}
+
+/* ================================================================= VALIDASI
+   Aturan sama dengan tools/form_rules.py di server. Error tampil di bawah isian yang salah. */
+const V = {
+  FORBIDDEN: '\\/:*?"<>|',
+  alnum: (s) => (String(s).match(/[\p{L}\p{N}]/gu) || []).length,
+  readable: (s) => new Set((String(s).toLowerCase().match(/[\p{L}\p{N}]/gu) || [])).size >= 4,
+  fmt: (n) => n.toLocaleString("id-ID"),
+  name(value, label = "Nama modul") {
+    const raw = String(value ?? "");
+    const v = raw.replace(/\s+/g, " ").trim();
+    if (!v) return `${label} wajib diisi.`;
+    if (/[\r\n\t]/.test(raw.trim())) return `${label} harus satu baris.`;
+    if (v.length < 3) return `${label} minimal 3 karakter.`;
+    if (v.length > 80) return `${label} maksimal 80 karakter.`;
+    if ([...v].some((c) => V.FORBIDDEN.includes(c) || c.charCodeAt(0) < 32)) return `${label} tidak boleh memakai karakter ${[...V.FORBIDDEN].join(" ")}`;
+    if (!/\p{L}/u.test(v)) return `${label} harus mengandung huruf, tidak boleh hanya angka atau simbol.`;
+    return "";
+  },
+  notes(value, label = "Catatan QA") {
+    const v = String(value ?? "");
+    if (!v.trim()) return `${label} wajib diisi.`;
+    if (v.length > 200000) return `${label} terlalu panjang (maksimal ${V.fmt(200000)} karakter).`;
+    if (V.alnum(v) < 20 || v.trim().split(/\s+/).length < 3) return `${label} terlalu pendek. Minimal 20 huruf/angka dan 3 kata.`;
+    if (!V.readable(v)) return `${label} tidak berisi kalimat yang bisa dibaca.`;
+    return "";
+  },
+  optional(value, label) {
+    const v = String(value ?? "");
+    if (!v.trim()) return "";
+    if (v.length > 50000) return `${label} terlalu panjang (maksimal ${V.fmt(50000)} karakter).`;
+    if (V.alnum(v) < 10) return `${label} terlalu pendek untuk disusun menjadi aturan (minimal 10 huruf/angka). Kosongkan bila tidak perlu.`;
+    if (!V.readable(v)) return `${label} tidak berisi kalimat yang bisa dibaca.`;
+    return "";
+  },
+  image(file) {
+    if (!/\.(png|jpe?g|webp)$/i.test(file.name) || (file.type && !/^image\/(png|jpeg|webp)$/.test(file.type))) return `${file.name}: format harus PNG, JPG, atau WEBP.`;
+    if (!file.size) return `${file.name}: file kosong.`;
+    if (file.size > 40 * 1024 * 1024) return `${file.name}: ukuran file maksimal 40 MB.`;
+    return "";
+  },
+  prd(content) {
+    const v = String(content ?? "");
+    if (!v.trim()) return "Isi PRD kosong.";
+    if (new Blob([v]).size > 2000000) return "PRD terlalu besar (maksimal 2 MB).";
+    if (!/^#\s+\S/m.test(v)) return 'PRD harus punya judul di baris paling atas, diawali tanda # (mis. "# Nama Modul").';
+    return "";
+  },
+  NUM: { "c-bs": ["Skenario per kelompok", 1, 20, false], "c-ma": ["Batas menulis ulang", 1, 10, false],
+    "c-mo": ["Jumlah skenario maksimum", 1, 10000, true], "c-ctx": ["Kapasitas teks per permintaan", 2048, 131072, false] },
+  number(id, raw) {
+    const [label, lo, hi, optional] = V.NUM[id];
+    const v = String(raw ?? "").trim();
+    if (!v) return optional ? "" : `${label} wajib diisi.`;
+    if (!/^-?\d+$/.test(v)) return `${label} harus angka bulat.`;
+    const n = Number(v);
+    if (n < lo || n > hi) return `${label} harus di antara ${V.fmt(lo)} dan ${V.fmt(hi)}.`;
+    if (id === "c-ctx" && n % 1024) return `${label} harus kelipatan 1024 (mis. 4096, 8192, 16384).`;
+    return "";
+  },
+};
+
+function errBox(el) { return el.closest(".field") || el.closest("fieldset") || el; }
+function setErr(el, msg) {
+  if (!el || !msg) return;
+  const box = errBox(el);
+  box.classList.add("has-err");
+  if (el.matches("input, textarea, select")) el.setAttribute("aria-invalid", "true");
+  let m = box.querySelector(":scope > .err-msg");
+  if (!m) {
+    m = document.createElement("span");
+    m.className = "err-msg";
+    m.id = `${el.id || "isian"}-err`;
+    box.appendChild(m);
+  }
+  m.textContent = msg;
+  const ids = new Set((el.getAttribute("aria-describedby") || "").split(" ").filter(Boolean));
+  ids.add(m.id);
+  el.setAttribute("aria-describedby", [...ids].join(" "));
+}
+function clearErr(el) {
+  if (!el) return;
+  const box = errBox(el);
+  box.classList.remove("has-err");
+  el.removeAttribute("aria-invalid");
+  const m = box.querySelector(":scope > .err-msg");
+  if (m) {
+    const ids = (el.getAttribute("aria-describedby") || "").split(" ").filter((x) => x && x !== m.id);
+    ids.length ? el.setAttribute("aria-describedby", ids.join(" ")) : el.removeAttribute("aria-describedby");
+    m.remove();
+  }
+}
+function clearErrs(root = document) { root.querySelectorAll(".has-err").forEach((b) => { const el = b.querySelector("[aria-invalid]") || b; clearErr(el); b.classList.remove("has-err"); b.querySelector(":scope > .err-msg")?.remove(); }); }
+// errors: [[elemen, pesan], ...] -> tandai semua, fokus ke yang pertama. true bila tidak ada error.
+function report(errors, root) {
+  clearErrs(root);
+  const list = errors.filter(([el, msg]) => el && msg);
+  list.forEach(([el, msg]) => setErr(el, msg));
+  if (!list.length) return true;
+  const first = list[0][0];
+  if (!first.matches("input, textarea, select, button")) first.setAttribute("tabindex", "-1");
+  first.focus({ preventScroll: true });
+  first.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+  toast(list.length === 1 ? list[0][1] : `Ada ${list.length} isian yang perlu diperbaiki.`, true);
+  return false;
+}
+// error dari server: tampilkan di bawah isian yang disebut server, kalau ada
+function serverErr(e) {
+  const el = e.field && document.getElementById(e.field);
+  if (el) { setErr(el, e.message); el.focus && el.focus({ preventScroll: false }); }
+  toast(e.message, true);
 }
 
 function toast(msg, isErr) {
@@ -35,8 +151,11 @@ function toast(msg, isErr) {
   t.className = "toast" + (isErr ? " err" : "");
   t.setAttribute("role", isErr ? "alert" : "status");
   t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), isErr ? 7000 : 3500);
+  let box = document.getElementById("toasts");
+  if (!box) { box = document.createElement("div"); box.id = "toasts"; document.body.appendChild(box); }
+  while (box.children.length >= 3) box.firstChild.remove(); // maksimal 3 notifikasi bertumpuk
+  box.appendChild(t);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 220); }, isErr ? 7000 : 3500);
 }
 
 function fmtDate(ts, withYear) {
@@ -236,7 +355,7 @@ async function refreshNav() {
   try {
     S.overview = await api("/api/overview");
   } catch (e) {
-    setNavStatus("Tera tidak terhubung", "Jendela PowerShell Tera harus tetap terbuka");
+    setNavStatus("TƎRᗩ tidak terhubung", "Jendela PowerShell TƎRᗩ harus tetap terbuka");
     return;
   }
   const o = S.overview, pf = o.preflight;
@@ -322,7 +441,7 @@ async function viewBeranda() {
 
   app.innerHTML = `
   <header class="page-head"><div>
-      <h1>Selamat datang di Tera</h1>
+      <h1>Selamat datang di TƎRᗩ</h1>
       <p class="muted">Ubah dokumen PRD menjadi test case siap pakai, langsung di laptop ini.</p></div>
     <div class="actions">${last ? `<a class="btn" href="#hasil/${esc(last.id)}">Lihat hasil terakhir</a>` : ""}
       <a class="btn btn-primary" href="#mulai">Mulai buat test case</a></div></header>
@@ -370,7 +489,7 @@ async function viewMulai() {
       <h2 id="prd-title">Dokumen</h2>
       <label class="field" for="prd-select">Dokumen PRD
         ${prds.length ? `<select id="prd-select" name="prd">${prds.map((p) => `<option value="${esc(p.file)}" ${p.file === chosen ? "selected" : ""}>${esc(p.title)}</option>`).join("")}</select>
-          <span class="hint" id="prd-file-name">File: ${esc(chosen || "")}</span>` : `<span class="muted">Belum ada dokumen.</span>`}
+          <span class="hint" id="prd-file-name">File: ${esc(chosen || "")}</span>` : `<span class="muted" id="prd-empty">Belum ada dokumen.</span>`}
       </label>
       <div><button type="button" class="btn" data-action="upload">Tambah dokumen PRD</button>
         <input type="file" id="prd-file" accept=".md" hidden></div>
@@ -407,19 +526,25 @@ async function recheck(btn) {
 
 async function uploadPrd(file) {
   if (!file) return;
-  if (!/\.md$/i.test(file.name)) return toast("Pilih file berformat .md", true);
+  const box = document.getElementById("prd-select") || document.getElementById("prd-empty");
+  if (!/\.md$/i.test(file.name)) return report([[box, `${file.name}: file PRD harus berformat .md`]]);
+  if (file.size > 2000000) return report([[box, `${file.name}: PRD terlalu besar (maksimal 2 MB).`]]);
   try {
     const text = await file.text();
+    if (text.includes("\uFFFD")) return report([[box, `${file.name}: isi file bukan teks UTF-8 yang bisa dibaca.`]]);
+    const bad = V.prd(text);
+    if (bad) return report([[box, `${file.name}: ${bad}`]]);
     const r = await api("/api/prds", { method: "POST", body: { name: file.name, content: text } });
     S.mulaiPrd = r.file;
     toast(`Dokumen ${r.title} ditambahkan`);
     route();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { report([[box, e.message]]); }
 }
 
 async function startRun() {
-  const prd = (document.getElementById("prd-select") || {}).value;
-  if (!prd) return toast("Pilih dokumen PRD dulu", true);
+  const sel = document.getElementById("prd-select");
+  const prd = (sel || {}).value;
+  if (!prd) return report([[sel || document.getElementById("prd-empty"), "Pilih dokumen PRD dulu, atau tambahkan file PRD (.md)."]]);
   const btn = document.querySelector('[data-action="start"]');
   btn.disabled = true;
   btn.textContent = "Memulai...";
@@ -427,10 +552,93 @@ async function startRun() {
     await api("/api/runs", { method: "POST", body: { prd } });
     location.hash = "#berjalan";
   } catch (e) {
-    toast(e.message, true);
+    serverErr(e);
     btn.disabled = false;
     btn.textContent = "Mulai buat test case";
   }
+}
+
+/* ================================================================= ALUR KERJA (diagram animasi) */
+const FLOWS = [
+  {
+    id: "konversi", title: "Catatan Konversi ke PRD", note: "Konversi Dokumen",
+    steps: [
+      ["in", "Catatan QA", "Kamu menempel catatan bebas: notulen, chat, poin-poin. Boleh campur Indonesia dan Inggris."],
+      ["ai", "Baca per baris", "AI penulis mengambil setiap informasi beserta kutipan aslinya dari catatan."],
+      ["code", "Penjaga anti-karangan", "Kode mengecek kutipan benar-benar ada di catatan, dan angka, role, serta status tidak dikarang. Yang gagal ditolak."],
+      ["ai", "Baca ulang yang terlewat", "Baris catatan yang belum terbaca ditanyakan ulang sekali ke AI."],
+      ["code", "Kelompokkan per fitur", "Aturan disusun per fitur, beserta status dan tabel hak akses per role."],
+      ["ai", "Cari yang belum jelas", "AI mendaftar hal yang bertentangan atau belum jelas untuk ditanyakan ke tim."],
+      ["out", "PRD + catatan review", "PRD siap dipakai generator test case. Hal yang diragukan ada di catatan review (PDF) terpisah."],
+    ],
+  },
+  {
+    id: "desain", title: "Desain Konversi ke PRD", note: "Konversi Dokumen",
+    steps: [
+      ["in", "Gambar + penjelasan", "Per halaman/fitur: gambar export Figma atau screenshot, plus penjelasan opsional dan deskripsi tambahan."],
+      ["code", "Potong layar & latar buram", "Papan alur dipotong per layar. Latar buram di belakang modal/panel dibuang supaya tidak ada yang bisa ditebak. Layar kembar dibaca sekali."],
+      ["code", "Baca teks (pembaca teks Windows)", "Teks di layar dibaca persis dalam hitungan detik, termasuk salah ketik. Tidak bisa mengarang karena hanya membaca huruf yang ada."],
+      ["ai", "Kenali jenis elemen", "AI melihat gambar dan hanya memberi jenis pada teks bernomor: tombol, field, label, placeholder, pesan, tabel. AI tidak bisa menambah teks baru."],
+      ["code", "Susun isi layar", "Label dipasangkan dengan isiannya, pesan bantuan dengan field-nya, isi tabel dengan kolomnya, lalu urutan layar di papan alur dicatat."],
+      ["ai", "Baca penjelasan", "Penjelasan QA diproses dengan penjaga kutipan yang sama seperti Catatan Konversi ke PRD."],
+      ["out", "PRD + catatan review", "PRD siap dipakai generator test case. Hal yang perlu dikonfirmasi (mis. field abu-abu) ada di catatan review (PDF)."],
+    ],
+  },
+  {
+    id: "generator", title: "Generator Test Case PRD", note: "Generator Test Case PRD",
+    steps: [
+      ["in", "Dokumen PRD", "PRD dipilih di menu Mulai baru, termasuk PRD hasil konversi catatan."],
+      ["code", "Pecah aturan", "Setiap kalimat aturan dipecah menjadi aturan kecil: panjang, format, wajib diisi, perpindahan status, dan lainnya."],
+      ["mix", "Rancang skenario uji", "Teknik uji dipilih otomatis: batas nilai, partisi, decision table, dan state transition. AI menganalisis nilai serta hasil decision table dari PRD."],
+      ["ai", "Tulis test case", "AI penulis menulis judul, pre-condition, langkah, test data, dan expected result per kelompok kecil.", "loop"],
+      ["code", "Periksa otomatis", "Kode mengecek angka, istilah, dan langkah. Kalau salah, test case ditulis ulang, maksimal 3 kali.", "loop"],
+      ["ai", "AI pemeriksa", "Model AI kedua menilai setiap test case terhadap PRD. Yang meragukan ditandai Perlu dicek."],
+      ["code", "Cakupan & rapikan", "Memastikan semua aturan punya test case, menggabungkan duplikat, dan menyamakan nama field dengan PRD."],
+      ["out", "Excel test case", "Hasil siap diunduh, lengkap dengan ringkasan, daftar Perlu dicek, dan cakupan requirement."],
+    ],
+  },
+];
+const FLOW_TAG = { in: ["Masukan", "tag-in"], out: ["Hasil", "tag-out"], ai: ["AI", "tag-ai"], code: ["Kode", "tag-code"], mix: ["Kode + AI", "tag-ai"] };
+
+function flowHtml(f, models) {
+  const n = f.steps.length;
+  const step = (s, i) => {
+    const [kind, title, desc] = s;
+    const [tag, cls] = FLOW_TAG[kind];
+    const who = kind === "ai" || kind === "mix" ? (/pemeriksa/i.test(title) ? models.judge : models.gen) : "";
+    return `<li class="fstep" style="--i:${i};--n:${n}">
+      <span class="fnum" aria-hidden="true">${i + 1}</span>
+      <div class="fbody"><div class="fhead"><strong>${esc(title)}</strong><span class="ftag ${cls}">${esc(tag)}</span></div>
+        <p>${esc(desc)}${who ? ` <span class="tiny muted">(${esc(who)})</span>` : ""}</p></div></li>`;
+  };
+  let html = "", i = 0;
+  while (i < n) {
+    if (f.steps[i][3] === "loop") {
+      const start = i;
+      while (i < n && f.steps[i][3] === "loop") i++;
+      html += `<li class="floop"><span class="floop-label"><span class="spin-ico" aria-hidden="true">&#8635;</span> Diulang untuk setiap kelompok skenario</span>
+        <ol class="flow">${f.steps.slice(start, i).map((s, k) => step(s, start + k)).join("")}</ol></li>`;
+    } else { html += step(f.steps[i], i); i++; }
+  }
+  return `<section class="card" aria-labelledby="fl-${f.id}">
+    <div class="card-head"><h2 id="fl-${f.id}">${esc(f.title)}</h2><span class="tiny muted">${n} tahap</span></div>
+    <ol class="flow">${html}</ol></section>`;
+}
+
+async function viewAlur() {
+  let models = { gen: "AI penulis", judge: "AI pemeriksa" };
+  try {
+    const pf = await api("/api/preflight");
+    const by = (r) => (pf.models.find((m) => new RegExp(r, "i").test(m.role)) || {}).name;
+    models = { gen: by("penulis") || models.gen, judge: by("pemeriksa") || models.judge };
+  } catch (e) { /* tanpa nama model pun diagram tetap tampil */ }
+  const paused = S.flowPaused;
+  app.innerHTML = `
+  <header class="page-head"><div><h1>Alur kerja TƎRᗩ</h1>
+    <p class="muted">Urutan proses yang terjadi di balik layar. Label <span class="ftag tag-ai">AI</span> berarti dikerjakan model AI di laptop ini, <span class="ftag tag-code">Kode</span> berarti aturan pasti yang dicek program (bukan tebakan AI).</p></div>
+    <div class="actions"><button type="button" class="btn" data-action="flow-toggle">${paused ? "Putar animasi" : "Jeda animasi"}</button></div></header>
+  <div class="grid grid-2 flows${paused ? " paused" : ""}">${FLOWS.map((f) => flowHtml(f, models)).join("")}</div>
+  <p class="small muted">Alur bisa disambung: hasil Catatan Konversi ke PRD dan Desain Konversi ke PRD bisa langsung dipakai di Generator Test Case PRD lewat tombol "Buat test case dari PRD ini".</p>`;
 }
 
 /* ================================================================= CATATAN QA -> PRD */
@@ -452,10 +660,10 @@ async function viewCatatan() {
     <section class="card" aria-labelledby="nt-title">
       <h2 id="nt-title">Catatan</h2>
       <label class="field" for="nt-name">Nama modul
-        <input id="nt-name" type="text" maxlength="80" placeholder="mis. Berita Acara" value="${esc(draft.name)}" ${running ? "disabled" : ""}>
+        <input id="nt-name" type="text" maxlength="80" aria-required="true" placeholder="mis. Berita Acara" value="${esc(draft.name)}" ${running ? "disabled" : ""}>
         <span class="hint">Dipakai sebagai Module di test case dan nama file PRD.</span></label>
       <label class="field" for="nt-text">Isi catatan
-        <textarea id="nt-text" class="notes" ${running ? "disabled" : ""} placeholder="Tempel catatan QA di sini...">${esc(draft.text)}</textarea></label>
+        <textarea id="nt-text" class="notes" aria-required="true" ${running ? "disabled" : ""} placeholder="Tempel catatan QA di sini...">${esc(draft.text)}</textarea></label>
       <div class="actions"><button type="button" class="btn btn-primary" data-action="notes-start" ${running ? "disabled" : ""}>${running ? "Sedang disusun..." : "Susun PRD"}</button>
         <span class="small muted">Biasanya beberapa menit, tergantung panjang catatan.</span></div>
     </section>
@@ -464,41 +672,44 @@ async function viewCatatan() {
       <ul class="log-lines" aria-live="polite">${log || `<li>Belum ada proses.</li>`}</ul>
     </section>
   </div>
-  ${res ? notesResult(res) : ""}`;
+  ${res ? notesResult(res, "catatan") : ""}`;
   stopNotesTimer();
   if (running) S.notesTimer = setInterval(async () => {
     if (!location.hash.startsWith("#catatan")) return stopNotesTimer();
     const m = await api("/api/notes").catch(() => null);
-    if (m && m.status !== "berjalan") { stopNotesTimer(); S.notesEdited = null; viewCatatan(); }
+    if (m && m.status !== "berjalan") { stopNotesTimer(); viewCatatan(); }
     else if (m) { const ul = document.querySelector(".log-lines"); if (ul) ul.innerHTML = (m.log || []).map((l) => `<li><time>${esc(new Date(l.time * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }))}</time>${esc(l.msg)}</li>`).join(""); }
   }, 3000);
 }
 
-function notesResult(r) {
+function notesResult(r, kind) {
+  const design = kind === "desain";
+  const src = design ? "desain dan penjelasan" : "catatan";
   const qs = r.questions || [];
   const conflict = qs.filter((q) => q.jenis === "bertentangan").length;
-  const qItem = (q) => `<li>${q.jenis === "bertentangan" ? `<span class="chip">Bertentangan</span> ` : ""}${esc(q.pertanyaan)}${q.fitur ? ` <span class="tiny muted">(${esc(q.fitur)})</span>` : ""}${q.kutipan ? `<br><span class="quote">Catatan: “${esc(q.kutipan)}”</span>` : ""}</li>`;
+  const qItem = (q) => `<li>${q.jenis === "bertentangan" ? `<span class="chip">Bertentangan</span> ` : q.jenis === "konfirmasi desain" ? `<span class="chip">Cek desain</span> ` : ""}${esc(q.pertanyaan)}${q.fitur ? ` <span class="tiny muted">(${esc(q.fitur)})</span>` : ""}${q.kutipan ? `<br><span class="quote">Catatan: “${esc(q.kutipan)}”</span>` : ""}</li>`;
   return `
   <section class="card" aria-labelledby="nr-title" style="margin-top:16px">
     <div class="card-head"><h2 id="nr-title">Hasil: ${esc(r.prd_file)}</h2>
       <span class="small muted">${num(r.features)} fitur, ${num(r.rules)} aturan; catatan review: ${num(qs.length)} pertanyaan${conflict ? ` (${conflict} bertentangan)` : ""}</span></div>
-    <p class="small muted">PRD ini sudah tersimpan dan muncul di daftar dokumen pada Mulai baru. PRD hanya berisi aturan dari catatan; hal yang diragukan ada di catatan review terpisah.</p>
+    ${design && r.stats ? `<p class="small muted">${num(r.stats.screens)} layar dari ${num(r.stats.images)} gambar${r.stats.duplicates ? ` (${num(r.stats.duplicates)} layar kembar dibaca sekali)` : ""}. Teks di dalam tanda kutip disalin persis dari desain oleh pembaca teks Windows.</p>` : ""}
+    <p class="small muted">PRD ini sudah tersimpan dan muncul di daftar dokumen pada Mulai baru. PRD hanya berisi aturan dari ${src}; hal yang diragukan ada di catatan review terpisah.</p>
     <div class="card-head" style="margin-top:8px"><h3>Catatan review (terpisah dari PRD)</h3>
       <a class="btn btn-small" href="/api/conversions/${encodeURIComponent(r.id)}/review" download="${esc(r.review_file || "catatan_review.pdf")}">Unduh catatan review (PDF)</a></div>
-    <p class="small muted">Berisi hal yang bertentangan atau belum jelas untuk ditanyakan ke tim, isian AI yang ditolak, baris catatan yang belum masuk, dan asal setiap aturan. Tidak dipakai untuk membuat test case.</p>
+    <p class="small muted">${design ? "Berisi hal di desain yang perlu dikonfirmasi, hal yang belum jelas, isian AI yang ditolak, teks yang terbaca per layar, dan asal setiap aturan." : "Berisi hal yang bertentangan atau belum jelas untuk ditanyakan ke tim, isian AI yang ditolak, baris catatan yang belum masuk, dan asal setiap aturan."} Tidak dipakai untuk membuat test case.</p>
     ${qs.length ? `<ol class="qlist">${qs.map(qItem).join("")}</ol>` : `<p class="small muted">Tidak ada pertanyaan terbuka.</p>`}
-    ${(r.missed_lines || []).length ? `<details class="fold"><summary>Baris catatan yang belum masuk PRD (${r.missed_lines.length})</summary>
+    ${(r.missed_lines || []).length ? `<details class="fold"><summary>${design ? "Baris penjelasan" : "Baris catatan"} yang belum masuk PRD (${r.missed_lines.length})</summary>
       <ul class="qlist">${r.missed_lines.map((m) => `<li>Baris ${m.baris}: “${esc(m.teks)}”</li>`).join("")}</ul></details>` : ""}
     ${(r.rejected || []).length ? `<details class="fold"><summary>Isian AI yang ditolak penjaga anti-karangan (${r.rejected.length})</summary>
       <ul class="qlist">${r.rejected.map((x) => `<li>${esc(x.pernyataan || "-")}<br><span class="quote">${esc(x.alasan || "")}</span></li>`).join("")}</ul></details>` : ""}
     <label class="field" for="nr-md" style="margin-top:12px">Isi PRD (boleh diedit)
-      <textarea id="nr-md" class="notes tall">${esc(S.notesEdited ?? r.markdown)}</textarea></label>
+      <textarea id="nr-md" class="notes tall">${esc((S.editedMd || {})[r.prd_file] ?? r.markdown)}</textarea></label>
     <div class="actions">
       <button type="button" class="btn" data-action="notes-save" data-file="${esc(r.prd_file)}">Simpan perubahan</button>
       <button type="button" class="btn btn-primary" data-action="notes-use" data-file="${esc(r.prd_file)}">Buat test case dari PRD ini</button>
     </div>
     <div class="actions" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--line-soft)">
-      <button type="button" class="btn" data-action="notes-reset">Mulai ulang (konversi baru)</button>
+      <button type="button" class="btn" data-action="${design ? "design-reset" : "notes-reset"}">Mulai ulang (konversi baru)</button>
       <button type="button" class="btn" data-action="conv-delete" data-conv="${esc(r.id)}">Hapus hasil ini</button>
       <span class="small muted">Mulai ulang mengosongkan halaman ini, hasilnya tetap tersimpan di Riwayat. Hapus membuang PRD dan catatan review ini.</span>
     </div>
@@ -509,20 +720,17 @@ async function notesStart() {
   const name = document.getElementById("nt-name").value.trim();
   const text = document.getElementById("nt-text").value;
   S.notesDraft = { name, text };
-  if (!name) return toast("Isi nama modul dulu", true);
-  if (text.trim().length < 20) return toast("Tempel catatan QA dulu", true);
+  if (!report([[document.getElementById("nt-name"), V.name(name)], [document.getElementById("nt-text"), V.notes(text)]])) return;
   try {
-    S.notesEdited = null;
     await api("/api/notes", { method: "POST", body: { name, text } });
     viewCatatan();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { serverErr(e); }
 }
 
 async function notesReset() {
   try {
     await api("/api/notes/reset", { method: "POST" });
     S.notesDraft = { name: "", text: "" };
-    S.notesEdited = null;
     viewCatatan();
   } catch (e) { toast(e.message, true); }
 }
@@ -532,17 +740,231 @@ async function convDelete(id, fromHistory) {
   try {
     await api(`/api/conversions/${encodeURIComponent(id)}`, { method: "DELETE" });
     toast("Hasil konversi dihapus");
-    if (!fromHistory) { S.notesDraft = { name: "", text: "" }; S.notesEdited = null; }
+    if (!fromHistory && location.hash.startsWith("#catatan")) S.notesDraft = { name: "", text: "" };
+    if (!fromHistory && location.hash.startsWith("#desain")) S.design = null;
     route();
   } catch (e) { toast(e.message, true); }
 }
 
 async function notesSave(file, thenUse) {
   const ta = document.getElementById("nr-md");
+  if (!report([[ta, V.prd(ta.value)]])) return;
   try {
     await api(`/api/prds/${encodeURIComponent(file)}`, { method: "PUT", body: { content: ta.value } });
-    S.notesEdited = ta.value;
+    S.editedMd = { ...(S.editedMd || {}), [file]: ta.value };
     if (thenUse) { S.mulaiPrd = file; location.hash = "#mulai"; } else toast("PRD disimpan");
+  } catch (e) { serverErr(e); }
+}
+
+/* ================================================================= DESAIN (gambar) -> PRD */
+let cardSeq = 0;
+const newCard = () => ({ key: ++cardSeq, nama: "", teks: "", images: [] });
+function designState() {
+  if (!S.design) S.design = { name: "", extra: "", cards: [newCard()] };
+  return S.design;
+}
+function stopDesignTimer() {
+  if (S.designTimer) { clearInterval(S.designTimer); S.designTimer = null; }
+}
+const logHtml = (log) => (log || []).map((l) => `<li><time>${esc(new Date(l.time * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }))}</time>${esc(l.msg)}</li>`).join("");
+
+function designEstimate() {
+  const D = designState();
+  const busy = D.cards.flatMap((c) => c.images).filter((i) => i.status === "upload").length;
+  if (busy) return `Sedang mengunggah dan memotong ${busy} gambar menjadi layar. Tombol Susun PRD aktif setelah semuanya selesai.`;
+  const imgs = D.cards.flatMap((c) => c.images.filter((i) => i.status === "ok"));
+  const screens = imgs.reduce((a, i) => a + (i.screens || 1), 0);
+  const texts = D.cards.filter((c) => c.teks.trim()).length + (D.extra.trim() ? 1 : 0);
+  if (!screens && !texts) return "Tambahkan gambar atau penjelasan untuk melihat perkiraan waktu.";
+  const mins = Math.max(2, Math.round(screens * 2.5 + texts * 1.5 + 1));
+  const dur = mins >= 90 ? `±${Math.round(mins / 6) / 10} jam` : `±${mins} menit`;
+  return `Perkiraan kasar: ${dur}` + (screens ? ` (${screens} layar terdeteksi dari ${imgs.length} gambar; layar kembar dibaca sekali)` : "") + "." +
+    (screens > 40 ? " Ini lama sekali; sebaiknya export per alur atau per section saja." : "");
+}
+
+const PHASES = { siapkan: "Menyiapkan gambar", baca_teks: "Membaca teks di gambar", kenali: "Mengenali elemen layar",
+  penjelasan: "Membaca penjelasan", susun: "Menyusun PRD dan catatan review", selesai: "Menyimpan hasil" };
+
+function designProgress(d) {
+  const P = d.progress || {};
+  const secs = P.screen_secs || [];
+  const avg = secs.length ? secs.reduce((a, b) => a + b, 0) / secs.length : 150; // default ±2,5 menit per layar
+  const st = P.screens_total || 0, sd = P.screens_done || 0, tt = P.texts_total || 0, td = P.texts_done || 0;
+  const tail = 45;
+  const total = st * avg + tt * 90 + tail;
+  const done = sd * avg + td * 90 + (P.phase === "susun" || P.phase === "selesai" ? tail * 0.5 : 0);
+  const pct = Math.max(2, Math.min(99, Math.round((done / Math.max(1, total)) * 100)));
+  const remain = Math.max(30, total - done);
+  return { pct, remain, avg, P, st, sd, tt, td, estimated: secs.length > 0 };
+}
+
+function designProgressHtml(d) {
+  const g = designProgress(d);
+  const elapsed = Math.max(0, (d.now || Date.now() / 1000) - (d.started || 0));
+  const phase = PHASES[g.P.phase] || "Memulai";
+  const detail = g.P.phase === "kenali" ? ` — layar ${num(Math.min(g.sd + 1, g.st))} dari ${num(g.st)}` :
+    g.P.phase === "penjelasan" ? ` — ${num(g.td + 1)} dari ${num(g.tt)}` : "";
+  const finish = new Date(Date.now() + g.remain * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  return `<section class="card dprog" aria-labelledby="dp-h">
+    <div class="dprog-head"><span class="spinner big" aria-hidden="true"></span>
+      <div><h2 id="dp-h">${esc(phase)}${esc(detail)}</h2>
+      <p class="small muted">Sudah berjalan <strong data-elapsed="${esc(String((d.started || 0)))}">${esc(fmtDur(elapsed))}</strong> · perkiraan sisa <strong>±${esc(fmtDur(g.remain))}</strong> (selesai sekitar ${esc(finish)})</p></div>
+      <span class="dprog-pct">${g.pct}%</span></div>
+    <div class="bar" role="progressbar" aria-label="Progres penyusunan PRD" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${g.pct}"><span style="width:${g.pct}%"></span></div>
+    <p class="tiny muted">${g.estimated ? `Rata-rata ${esc(fmtDur(g.avg))} per layar di laptop ini.` : "Perkiraan awal ±2,5 menit per layar; makin tepat setelah layar pertama selesai."} Laptop dijaga tidak tidur; jangan tutup layar laptop. Halaman ini boleh ditinggal, prosesnya tetap jalan.</p>
+  </section>`;
+}
+
+function imgsHtml(c, disabled) {
+  return c.images.map((im, k) => `<figure class="dimg${im.status === "err" ? " err" : ""}${im.fresh && !(im.fresh = false) ? " img-in" : ""}">
+      ${im.url ? `<img src="${esc(im.url)}" alt="">` : `<div class="dimg-ph" aria-hidden="true"></div>`}
+      <figcaption><span class="dimg-name" title="${esc(im.name)}">${esc(im.name)}</span>
+        <span class="tiny muted">${im.status === "upload" ? `<span class="spinner" aria-hidden="true"></span> mengunggah & menghitung layar...` : im.status === "err" ? esc(im.error || "gagal") : `${num(im.screens)} layar`}</span></figcaption>
+      ${disabled ? "" : `<button type="button" class="dimg-x" data-action="design-img-del" data-card="${c.key}" data-img="${k}" aria-label="Hapus gambar ${esc(im.name)}">&times;</button>`}
+    </figure>`).join("");
+}
+
+function cardHtml(c, i, n, disabled) {
+  const fresh = S.cardJust === c.key;
+  return `<section class="card dcard${fresh ? " card-in" : ""}" data-card="${c.key}" aria-labelledby="dc-${c.key}">
+    <div class="card-head"><h2 id="dc-${c.key}">Halaman / fitur ${i + 1}</h2>
+      ${n > 1 && !disabled ? `<button type="button" class="btn btn-small" data-action="design-card-del" data-card="${c.key}">Hapus</button>` : ""}</div>
+    <label class="field" for="dn-${c.key}">Nama halaman / fitur
+      <input id="dn-${c.key}" type="text" maxlength="80" aria-required="true" data-dfield="nama" data-card="${c.key}" placeholder="mis. Add User" value="${esc(c.nama)}" ${disabled ? "disabled" : ""}>
+      <span class="hint">Jadi judul fitur di PRD dan Sub Module di test case.</span></label>
+    <div class="dcard-body">
+      <label class="field" for="dt-${c.key}">Penjelasan (opsional)
+        <textarea id="dt-${c.key}" class="notes short" data-dfield="teks" data-card="${c.key}" placeholder="Aturan yang tidak terlihat di gambar, mis. siapa yang boleh mengakses, validasi, batas karakter..." ${disabled ? "disabled" : ""}>${esc(c.teks)}</textarea></label>
+      <div class="field"><span>Gambar desain</span>
+        <div class="dimgs" id="di-${c.key}" data-drop="${c.key}">${imgsHtml(c, disabled)}
+          ${disabled ? "" : `<label class="dimg-add"><input type="file" accept="image/png,image/jpeg,image/webp" multiple data-dimg="${c.key}" class="sr-only">
+            <span aria-hidden="true">+</span><span class="tiny">Tambah gambar</span></label>`}</div>
+        <span class="hint">PNG/JPG hasil export Figma atau screenshot. Boleh banyak, boleh papan alur berisi beberapa layar. Bisa juga diseret ke sini.</span></div>
+    </div></section>`;
+}
+
+async function viewDesain() {
+  const d = await api("/api/design");
+  const running = d.status === "berjalan";
+  const res = d.status === "selesai" ? d.result : null;
+  const D = designState();
+  const locked = running || !!res;
+  app.innerHTML = `
+  <header class="page-head"><div><p class="tiny muted">Konversi Dokumen</p><h1>Desain Konversi ke PRD</h1>
+    <p class="muted">Unggah gambar desain per halaman atau fitur, tambahkan penjelasan bila ada. Teks di gambar dibaca oleh pembaca teks bawaan Windows (persis, termasuk salah ketik), AI hanya menentukan jenisnya: tombol, field, label, dan seterusnya. Hal yang diragukan masuk catatan review terpisah.</p></div></header>
+  ${d.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Penyusunan gagal.</strong> ${esc(d.error || "")}</span></div>` : ""}
+  ${running ? `<div id="dz-prog">${designProgressHtml(d)}</div>` : ""}
+  ${res ? "" : `
+  <section class="card"><label class="field" for="dz-name">Nama modul
+    <input id="dz-name" type="text" maxlength="80" aria-required="true" placeholder="mis. User Management" value="${esc(D.name)}" data-dfield="name" ${locked ? "disabled" : ""}>
+    <span class="hint">Dipakai sebagai Module di test case dan nama file PRD.</span></label></section>
+  <div id="dz-cards">${D.cards.map((c, i) => cardHtml(c, i, D.cards.length, locked)).join("")}</div>
+  ${locked ? "" : `<div class="actions" style="justify-content:center;margin:4px 0 16px"><button type="button" class="btn" data-action="design-card-add">+ Tambah halaman / fitur</button></div>`}
+  <section class="card"><label class="field" for="dz-extra">Deskripsi tambahan (opsional)
+    <textarea id="dz-extra" class="notes short" data-dfield="extra" placeholder="Aturan umum yang berlaku di semua halaman, daftar role, dan sebagainya." ${locked ? "disabled" : ""}>${esc(D.extra)}</textarea></label>
+    <div class="actions"><button type="button" class="btn btn-primary" id="dz-start" data-action="design-start" ${locked || designBusy() ? "disabled" : ""}>${running ? "Sedang disusun..." : designBusy() ? "Menunggu gambar..." : "Susun PRD"}</button>
+      <span class="small muted" id="dz-est">${esc(designEstimate())}</span></div>
+  </section>`}
+  ${running || (d.log || []).length ? `<section class="log" aria-labelledby="dz-log"><h2 id="dz-log">Progres</h2>
+    <ul class="log-lines" aria-live="polite">${logHtml(d.log) || "<li>Memulai...</li>"}</ul></section>` : ""}
+  ${res ? notesResult(res, "desain") : ""}`;
+  stopDesignTimer();
+  if (running) {
+    let last = { ...d, _at: Date.now() / 1000 };
+    S.designTimer = setInterval(async () => {
+      if (!location.hash.startsWith("#desain")) return stopDesignTimer();
+      S.designTick = (S.designTick || 0) + 1;
+      if (S.designTick % 3 === 0) {
+        const m = await api("/api/design").catch(() => null);
+        if (m && m.status !== "berjalan") { stopDesignTimer(); return viewDesain(); }
+        if (m) {
+          last = { ...m, _at: Date.now() / 1000 };
+          const ul = document.querySelector(".log-lines"); if (ul) ul.innerHTML = logHtml(m.log);
+        }
+      }
+      const box = document.getElementById("dz-prog");
+      if (box) box.innerHTML = designProgressHtml({ ...last, now: (last.now || last._at) + (Date.now() / 1000 - last._at) });
+    }, 1000);
+  }
+}
+
+function designCard(key) { return designState().cards.find((c) => c.key === Number(key)); }
+function refreshDesignImgs(c) {
+  const box = document.getElementById(`di-${c.key}`);
+  if (box) { const add = box.querySelector(".dimg-add"); box.querySelectorAll("figure").forEach((f) => f.remove()); add ? add.insertAdjacentHTML("beforebegin", imgsHtml(c, false)) : box.insertAdjacentHTML("afterbegin", imgsHtml(c, false)); }
+  const e = document.getElementById("dz-est"); if (e) e.textContent = designEstimate();
+  const b = document.getElementById("dz-start");
+  if (b && b.textContent !== "Sedang disusun...") {
+    const busy = designBusy();
+    b.disabled = busy;
+    b.textContent = busy ? "Menunggu gambar..." : "Susun PRD";
+  }
+}
+// tombol Susun PRD baru aktif setelah semua gambar selesai diunggah dan dipotong per layar
+function designBusy() { return designState().cards.some((c) => c.images.some((i) => i.status === "upload")); }
+function readDataUrl(file) {
+  return new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => bad(new Error("Gambar tidak terbaca")); r.readAsDataURL(file); });
+}
+async function designAddImages(key, files) {
+  const c = designCard(key);
+  if (!c) return;
+  const box = document.getElementById(`di-${c.key}`);
+  const problems = [];
+  for (const file of files) {
+    const bad = V.image(file) || (c.images.some((i) => i.name === file.name && i.bytes === file.size && i.status !== "err") ? `${file.name}: gambar ini sudah ditambahkan di halaman ini.` : "");
+    if (bad) { problems.push(bad); continue; }
+    if (box) clearErr(box);
+    const im = { name: file.name, bytes: file.size, status: "upload", fresh: true, url: URL.createObjectURL(file) };
+    c.images.push(im);
+    refreshDesignImgs(c);
+    try {
+      const r = await api("/api/design/images", { method: "POST", body: { name: file.name, data: await readDataUrl(file) } });
+      Object.assign(im, { id: r.id, screens: r.screens, status: "ok" });
+    } catch (e) { Object.assign(im, { status: "err", error: e.message.replace(`${file.name}: `, "") }); problems.push(e.message.startsWith(file.name) ? e.message : `${file.name}: ${e.message}`); }
+    refreshDesignImgs(c);
+  }
+  if (problems.length && box) { setErr(box, problems.join(" ")); toast(problems.length === 1 ? problems[0] : `${problems.length} gambar tidak bisa dipakai. Lihat keterangan di bawah kotak gambar.`, true); }
+}
+async function designStart() {
+  const D = designState();
+  if (designBusy()) return toast("Tunggu sampai semua gambar selesai diunggah", true);
+  const $ = (id) => document.getElementById(id);
+  const errs = [[$("dz-name"), V.name(D.name)]];
+  const used = new Map();
+  let filled = 0;
+  D.cards.forEach((c, i) => {
+    const n = i + 1;
+    const nama = c.nama.replace(/\s+/g, " ").trim();
+    const ok = c.images.filter((im) => im.status === "ok");
+    const failed = c.images.filter((im) => im.status === "err");
+    if (!nama && !c.teks.trim() && !c.images.length) return; // kartu kosong diabaikan
+    filled++;
+    let e = V.name(c.nama, `Nama halaman / fitur ke-${n}`);
+    if (!e && used.has(nama.toLowerCase())) e = `Nama halaman / fitur ke-${n} sama dengan halaman ke-${used.get(nama.toLowerCase())}. Pakai nama yang berbeda.`;
+    if (nama) used.set(nama.toLowerCase(), used.get(nama.toLowerCase()) || n);
+    errs.push([$(`dn-${c.key}`), e]);
+    errs.push([$(`dt-${c.key}`), V.optional(c.teks, `Penjelasan halaman ke-${n}`)]);
+    if (failed.length) errs.push([$(`di-${c.key}`), `Ada ${failed.length} gambar yang gagal di halaman ke-${n}. Hapus gambar yang bertanda merah.`]);
+    else if (!ok.length && !c.teks.trim()) errs.push([$(`di-${c.key}`), `Halaman ke-${n} belum berisi gambar atau penjelasan. Tambahkan salah satunya, atau hapus kartu ini.`]);
+  });
+  if (!filled) errs.push([$("dz-cards"), "Isi minimal satu halaman/fitur dengan gambar atau penjelasan."]);
+  errs.push([$("dz-extra"), V.optional(D.extra, "Deskripsi tambahan")]);
+  const total = D.cards.reduce((a, c) => a + c.teks.length, 0) + D.extra.length;
+  if (total > 200000) errs.push([$("dz-extra"), `Total penjelasan terlalu panjang (maksimal ${V.fmt(200000)} karakter).`]);
+  if (!report(errs)) return;
+  const cards = D.cards.map((c) => ({ key: c.key, nama: c.nama.trim(), teks: c.teks, images: c.images.filter((i) => i.status === "ok").map((i) => ({ id: i.id, name: i.name })) }));
+  try {
+    await api("/api/design", { method: "POST", body: { name: D.name.trim(), extra: D.extra, cards } });
+    await viewDesain();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (e) { serverErr(e); }
+}
+
+async function designReset() {
+  try {
+    await api("/api/design/reset", { method: "POST" });
+    S.design = null;
+    viewDesain();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -792,7 +1214,7 @@ function renderTcZone() {
   const f = H.filters;
   zone.innerHTML = `
   <div class="filters">
-    <label class="field grow small" for="f-q">Cari judul atau ID<input id="f-q" type="search" data-filter="q" value="${esc(f.q)}" placeholder="misalnya TC-109 atau login"></label>
+    <label class="field grow small" for="f-q">Cari judul atau ID<input id="f-q" type="search" maxlength="100" data-filter="q" value="${esc(f.q)}" placeholder="misalnya TC-109 atau login"></label>
     <label class="field small" for="f-mod">Fitur<select id="f-mod" data-filter="mod">${opt("feat", "Semua fitur", f.mod)}</select></label>
     <label class="field small" for="f-tek">Teknik<select id="f-tek" data-filter="tek">${opt("technique", "Semua teknik", f.tek)}</select></label>
     <label class="field small" for="f-kat">Kategori<select id="f-kat" data-filter="kat">${opt("category", "Semua", f.kat)}</select></label>
@@ -850,7 +1272,7 @@ async function viewCek(runId) {
     const list = open ? items : items.slice(0, SHOW);
     return `<section class="card" id="g-${g.key}" aria-labelledby="h-${g.key}" style="gap:4px">
       <h2 id="h-${g.key}">${esc(g.title)}</h2><p class="small muted" style="margin-bottom:12px">${esc(g.desc)}</p>
-      ${list.map(({ t, txt }) => `<article class="item"><div class="item-head"><span class="mono muted">${esc(t.tc_no)}</span><h3>${esc(t.title)}</h3></div>
+      ${list.map(({ t, txt }, i) => `<article class="item${open && i >= SHOW && S.cekJust === g.key ? " item-in" : ""}"><div class="item-head"><span class="mono muted">${esc(t.tc_no)}</span><h3>${esc(t.title)}</h3></div>
         <p class="small">${esc(t.expected_result)}</p><p class="tiny muted">${esc(txt)}</p>
         <button type="button" class="link-btn small" data-action="goto-tc" data-tc="${esc(t.tc_no)}">Buka detail</button></article>`).join("")}
       ${items.length > SHOW ? `<button type="button" class="link-btn small" style="padding-top:10px" data-action="toggle-group" data-group="${g.key}">${open ? "Tampilkan lebih sedikit" : `Tampilkan ${items.length - SHOW} lainnya`}</button>` : ""}
@@ -901,7 +1323,7 @@ async function viewRiwayat() {
     <td><span class="actions">${r.status === "selesai" ? `<a class="btn btn-small" href="#hasil/${esc(r.id)}">Lihat hasil</a>` : r.status === "berjalan" ? `<a class="btn btn-small" href="#berjalan">Lihat progres</a>` : ""}
       ${r.status !== "berjalan" ? `<button type="button" class="btn btn-small" data-action="delete-run" data-run="${esc(r.id)}">Hapus</button>` : ""}</span></td></tr>`; };
   const convRow = (c) => `<tr>
-    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip grey">Konversi catatan</span></td><td>${esc(c.module || c.prd_file)}</td>
+    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip grey">${c.kind === "desain" ? "Konversi desain" : "Konversi catatan"}</span></td><td>${esc(c.module || c.prd_file)}</td>
     <td>${num(c.features)} fitur, ${num(c.rules)} aturan, ${num(c.questions)} pertanyaan${c.conflicts ? ` (${num(c.conflicts)} bertentangan)` : ""}</td>
     <td class="r">${esc(fmtDur(c.seconds))}</td><td>${statusChip("selesai")}</td>
     <td><span class="actions">
@@ -910,7 +1332,7 @@ async function viewRiwayat() {
       ${c.prd_exists ? `<button type="button" class="btn btn-small" data-action="conv-use" data-file="${esc(c.prd_file)}">Buat test case</button>` : ""}
       <button type="button" class="btn btn-small" data-action="conv-delete" data-conv="${esc(c.id)}">Hapus</button></span></td></tr>`;
   app.innerHTML = `
-  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini (pembuatan test case dan konversi catatan), terbaru di atas.</p></div>
+  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini (pembuatan test case, konversi catatan, dan konversi desain), terbaru di atas.</p></div>
     <div class="actions"><button type="button" class="btn" data-action="compare">Bandingkan 2 test case yang dipilih</button></div></header>
   <section class="card hist">
     ${rows.length ? `<div class="table-wrap"><table style="min-width:980px"><thead><tr>
@@ -992,15 +1414,15 @@ async function viewPengaturan() {
       <label class="field" for="c-judge">AI pemeriksa${sel("c-judge", cfg.judge_model)}</label>
       <label class="field" for="c-auto">AI untuk kasus rumit${sel("c-auto", cfg.auto_model, true)}
         <span class="hint">Dikerjakan paling akhir supaya laptop tidak bolak-balik memuat AI.</span></label>
-      <fieldset><legend>AI kasus rumit dipakai untuk</legend><div style="display:flex;flex-wrap:wrap;gap:4px 20px">
+      <fieldset id="c-kinds"><legend>AI kasus rumit dipakai untuk</legend><div style="display:flex;flex-wrap:wrap;gap:4px 20px">
         ${KINDS.map(([k, l]) => `<label class="check-inline"><input type="checkbox" data-kind="${k}" ${kinds.includes(k) ? "checked" : ""}>${l}</label>`).join("")}</div></fieldset>
     </section>
     <section class="card" aria-labelledby="r-title"><h2 id="r-title">Cara kerja</h2>
       <div class="fields">
-        <label class="field" for="c-bs">Skenario per kelompok<input id="c-bs" type="number" min="1" value="${esc(cfg.batch_size ?? 5)}"></label>
-        <label class="field" for="c-ma">Batas menulis ulang<input id="c-ma" type="number" min="1" value="${esc(cfg.max_attempts ?? 3)}"></label>
-        <label class="field" for="c-mo">Jumlah skenario maksimum<input id="c-mo" type="number" min="1" value="${esc(cfg.max_obligations ?? "")}" placeholder="Semua"></label>
-        <label class="field" for="c-ctx">Kapasitas teks per permintaan<input id="c-ctx" type="number" min="1024" step="1024" value="${esc(cfg.num_ctx ?? 8192)}"></label>
+        <label class="field" for="c-bs">Skenario per kelompok<input id="c-bs" type="number" min="1" max="20" step="1" inputmode="numeric" value="${esc(cfg.batch_size ?? 5)}"><span class="hint">1–20</span></label>
+        <label class="field" for="c-ma">Batas menulis ulang<input id="c-ma" type="number" min="1" max="10" step="1" inputmode="numeric" value="${esc(cfg.max_attempts ?? 3)}"><span class="hint">1–10</span></label>
+        <label class="field" for="c-mo">Jumlah skenario maksimum<input id="c-mo" type="number" min="1" max="10000" step="1" inputmode="numeric" value="${esc(cfg.max_obligations ?? "")}" placeholder="Semua"><span class="hint">Kosongkan untuk semua, atau 1–10.000</span></label>
+        <label class="field" for="c-ctx">Kapasitas teks per permintaan<input id="c-ctx" type="number" min="2048" max="131072" step="1024" inputmode="numeric" value="${esc(cfg.num_ctx ?? 8192)}"><span class="hint">Kelipatan 1024, 2.048–131.072</span></label>
       </div>
       <label class="check"><input type="checkbox" id="c-judge-on" ${cfg.judge_enabled !== false ? "checked" : ""}><span>Periksa ulang dengan AI kedua<br><span class="hint">Hanya untuk skenario yang hasilnya belum pasti.</span></span></label>
       <label class="check"><input type="checkbox" id="c-think" ${cfg.think ? "checked" : ""}><span>Izinkan AI berpikir lebih lama<br><span class="hint">Sebaiknya mati di laptop tanpa GPU karena jauh lebih lambat.</span></span></label>
@@ -1016,40 +1438,49 @@ async function viewPengaturan() {
 }
 
 async function saveConfig() {
-  const v = (id) => document.getElementById(id).value.trim();
+  const $ = (id) => document.getElementById(id);
+  const v = (id) => $(id).value.trim();
   const int = (id) => { const x = v(id); return x === "" ? null : Number(x); };
+  const kinds = [...document.querySelectorAll("[data-kind]:checked")].map((c) => c.dataset.kind);
+  const errs = [
+    [$("c-gen"), v("c-gen") ? "" : "Pilih AI penulis test case."],
+    [$("c-judge"), v("c-judge") ? "" : "Pilih AI pemeriksa."],
+    [$("c-kinds"), v("c-auto") && !kinds.length ? "AI kasus rumit dipilih, jadi centang minimal satu pemakaiannya." : ""],
+    ...["c-bs", "c-ma", "c-mo", "c-ctx"].map((id) => [$(id), V.number(id, $(id).value)]),
+  ];
+  if (!report(errs)) return;
   const values = {
-    generation_model: v("c-gen"), judge_model: v("c-judge"), auto_model: v("c-auto"),
-    auto_model_kinds: [...document.querySelectorAll("[data-kind]:checked")].map((c) => c.dataset.kind),
+    generation_model: v("c-gen"), judge_model: v("c-judge"), auto_model: v("c-auto"), auto_model_kinds: kinds,
     batch_size: int("c-bs"), max_attempts: int("c-ma"), max_obligations: int("c-mo"), num_ctx: int("c-ctx"),
-    judge_enabled: document.getElementById("c-judge-on").checked, think: document.getElementById("c-think").checked,
-    dedup: document.getElementById("c-dedup").checked,
+    judge_enabled: $("c-judge-on").checked, think: $("c-think").checked, dedup: $("c-dedup").checked,
   };
-  for (const k of ["batch_size", "max_attempts", "num_ctx"]) {
-    if (values[k] === null || !Number.isInteger(values[k]) || values[k] < 1) return toast("Isi angka bulat minimal 1 di semua kolom angka (kecuali Jumlah skenario maksimum)", true);
-  }
-  if (values.max_obligations !== null && (!Number.isInteger(values.max_obligations) || values.max_obligations < 1)) return toast("Jumlah skenario maksimum harus angka bulat, atau kosongkan untuk semua", true);
   try {
     await api("/api/config", { method: "PUT", body: values });
     S.config = null;
     toast("Pengaturan disimpan. Berlaku untuk proses berikutnya.");
     refreshNav();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) { serverErr(e); }
 }
 
 /* ================================================================= router & event */
 function currentView() { return (location.hash.replace(/^#/, "").split("/")[0]) || "beranda"; }
 
+let lastRouted = null;
 async function route() {
   const [view, arg] = location.hash.replace(/^#/, "").split("/");
   const v = view || "beranda";
+  const changed = lastRouted !== location.hash;
+  lastRouted = location.hash;
   setActiveNav(v);
   if (v !== "berjalan") closeStream();
   if (v !== "catatan") stopNotesTimer();
+  if (v !== "desain") stopDesignTimer();
   try {
     if (v === "beranda") await viewBeranda();
     else if (v === "mulai") await viewMulai();
     else if (v === "catatan") await viewCatatan();
+    else if (v === "desain") await viewDesain();
+    else if (v === "alur") await viewAlur();
     else if (v === "berjalan") await viewBerjalan();
     else if (v === "hasil") await viewHasil(arg && decodeURIComponent(arg));
     else if (v === "cakupan") { setActiveNav("cakupan"); await viewHasil(arg && decodeURIComponent(arg), "cakupan"); }
@@ -1057,6 +1488,7 @@ async function route() {
     else if (v === "riwayat") await viewRiwayat();
     else if (v === "pengaturan") await viewPengaturan();
     else { location.hash = "#beranda"; return; }
+    if (changed) { app.classList.remove("view-in"); void app.offsetWidth; app.classList.add("view-in"); }
   } catch (e) {
     app.innerHTML = `<div class="banner error" role="alert"><span><strong>Halaman gagal dimuat.</strong> ${esc(e.message)}</span>
       <button type="button" class="btn btn-small" data-action="reload">Coba lagi</button></div>`;
@@ -1073,6 +1505,17 @@ app.addEventListener("click", (ev) => {
   else if (a === "notes-save") notesSave(el.dataset.file, false);
   else if (a === "notes-use") notesSave(el.dataset.file, true);
   else if (a === "notes-reset") notesReset();
+  else if (a === "design-reset") designReset();
+  else if (a === "design-start") designStart();
+  else if (a === "design-card-add") { const c = newCard(); designState().cards.push(c); S.cardJust = c.key; viewDesain().then(() => { S.cardJust = null; const n = document.getElementById(`dn-${c.key}`); if (n) n.focus({ preventScroll: true }); n && n.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }); }); }
+  else if (a === "design-card-del") {
+    const D = designState(); const key = Number(el.dataset.card);
+    const sec = el.closest(".dcard");
+    const go = () => { D.cards = D.cards.filter((c) => c.key !== key); viewDesain(); };
+    if (sec && !matchMedia("(prefers-reduced-motion: reduce)").matches) { sec.classList.add("card-out"); setTimeout(go, 200); } else go();
+  }
+  else if (a === "design-img-del") { const c = designCard(el.dataset.card); if (c) { c.images.splice(Number(el.dataset.img), 1); refreshDesignImgs(c); } }
+  else if (a === "flow-toggle") { S.flowPaused = !S.flowPaused; viewAlur(); }
   else if (a === "conv-delete") convDelete(el.dataset.conv, location.hash.startsWith("#riwayat"));
   else if (a === "conv-use") { S.mulaiPrd = el.dataset.file; location.hash = "#mulai"; }
   else if (a === "recheck") recheck(el);
@@ -1081,7 +1524,7 @@ app.addEventListener("click", (ev) => {
   else if (a === "prev") { H.page = Math.max(0, H.page - 1); renderTcZone(); }
   else if (a === "next") { H.page += 1; renderTcZone(); }
   else if (a === "goto-tc") { S.pendingTc = el.dataset.tc; location.hash = `#hasil/${encodeURIComponent(H.runId)}`; }
-  else if (a === "toggle-group") { S.cekOpen = S.cekOpen || new Set(); const g = el.dataset.group; S.cekOpen.has(g) ? S.cekOpen.delete(g) : S.cekOpen.add(g); viewCek(H.runId); }
+  else if (a === "toggle-group") { S.cekOpen = S.cekOpen || new Set(); const g = el.dataset.group; S.cekOpen.has(g) ? S.cekOpen.delete(g) : S.cekOpen.add(g); S.cekJust = S.cekOpen.has(g) ? g : null; viewCek(H.runId).then(() => { S.cekJust = null; }); }
   else if (a === "jump") { const t = document.getElementById(el.dataset.target); if (t) t.scrollIntoView({ block: "start", behavior: "smooth" }); }
   else if (a === "compare") renderCompare();
   else if (a === "delete-run") deleteRun(el.dataset.run);
@@ -1098,6 +1541,7 @@ app.addEventListener("keydown", (ev) => {
 app.addEventListener("change", (ev) => {
   const t = ev.target;
   if (t.id === "prd-file") uploadPrd(t.files[0]);
+  else if (t.dataset.dimg) { designAddImages(t.dataset.dimg, [...t.files]); t.value = ""; }
   else if (t.id === "prd-select") {
     S.mulaiPrd = t.value;
     const e = document.getElementById("estimate"); if (e && S.estimate) e.textContent = S.estimate(t.value);
@@ -1112,8 +1556,21 @@ app.addEventListener("change", (ev) => {
 });
 
 let searchTimer = null;
+document.addEventListener("input", (ev) => { if (ev.target.getAttribute && ev.target.getAttribute("aria-invalid")) clearErr(ev.target); });
+document.addEventListener("change", (ev) => {
+  const t = ev.target;
+  if (t.getAttribute && t.getAttribute("aria-invalid")) clearErr(t);
+  const fs = t.closest && t.closest("fieldset.has-err"); if (fs) clearErr(fs);
+  if (t.id === "c-auto" && !t.value) { const k = document.getElementById("c-kinds"); if (k) clearErr(k); }
+});
 app.addEventListener("input", (ev) => {
   const t = ev.target;
+  if (t.dataset.dfield) {
+    const D = designState();
+    if (t.dataset.card) { const c = designCard(t.dataset.card); if (c) c[t.dataset.dfield] = t.value; } else D[t.dataset.dfield] = t.value;
+    const e = document.getElementById("dz-est"); if (e) e.textContent = designEstimate();
+    return;
+  }
   if (t.dataset.filter !== "q") return;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
@@ -1124,6 +1581,16 @@ app.addEventListener("input", (ev) => {
     const n = document.getElementById("f-q");
     if (n) { n.focus(); n.setSelectionRange(pos, pos); }
   }, 250);
+});
+
+app.addEventListener("dragover", (ev) => { const z = ev.target.closest && ev.target.closest("[data-drop]"); if (z) { ev.preventDefault(); z.classList.add("drag"); } });
+app.addEventListener("dragleave", (ev) => { const z = ev.target.closest && ev.target.closest("[data-drop]"); if (z) z.classList.remove("drag"); });
+app.addEventListener("drop", (ev) => {
+  const z = ev.target.closest && ev.target.closest("[data-drop]");
+  if (!z) return;
+  ev.preventDefault();
+  z.classList.remove("drag");
+  designAddImages(z.dataset.drop, [...(ev.dataTransfer.files || [])]);
 });
 
 window.addEventListener("hashchange", () => { app.focus({ preventScroll: true }); window.scrollTo(0, 0); route(); });
@@ -1140,3 +1607,26 @@ setInterval(async () => {
 
 refreshNav();
 route();
+
+/* ================================================================= LAYAR PEMBUKA */
+// Muncul sekali setiap TƎRᗩ dibuka di tab baru. Setelah klik Masuk, refresh halaman tidak memunculkannya lagi.
+(function splash() {
+  const el = document.getElementById("splash");
+  if (!el) return;
+  let seen = false;
+  try { seen = sessionStorage.getItem("tera-masuk") === "1"; } catch (e) { /* penyimpanan browser tidak tersedia */ }
+  if (seen) { el.hidden = true; return; }
+  const main = document.querySelector(".shell") || document.getElementById("app");
+  if (main) main.setAttribute("aria-hidden", "true");
+  const btn = document.getElementById("splash-enter");
+  const enter = () => {
+    try { sessionStorage.setItem("tera-masuk", "1"); } catch (e) { /* abaikan */ }
+    if (main) main.removeAttribute("aria-hidden");
+    el.classList.add("leaving");
+    const done = () => { el.hidden = true; const a = document.getElementById("app"); if (a) a.focus(); };
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) done(); else setTimeout(done, 340);
+  };
+  btn.addEventListener("click", enter);
+  el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === "Escape") { ev.preventDefault(); enter(); } });
+  btn.focus();
+})();

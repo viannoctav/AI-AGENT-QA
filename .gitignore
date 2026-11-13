@@ -28,9 +28,9 @@ knowledge/vector_db/
 # --- Data kantor (jangan dipublikasikan) ---
 # Contoh test case perusahaan: dipakai AI sebagai acuan gaya penulisan.
 # Hapus baris di bawah HANYA jika repo privat dan memang boleh dibagikan.
-knowledge/company_testcases/
 # PRD hasil konversi catatan QA kantor
 knowledge/prd/*_dari_catatan*.md
+knowledge/prd/*_dari_desain*.md
 
 # --- File sementara Excel/Word yang sedang terbuka ---
 ~$*
@@ -38,3 +38,6 @@ knowledge/prd/*_dari_catatan*.md
 # --- File sementara Windows ---
 Thumbs.db
 desktop.ini
+
+# --- Catatan pemasang sekali klik ---
+pasang_tera.log

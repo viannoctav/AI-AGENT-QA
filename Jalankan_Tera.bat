@@ -15,8 +15,7 @@ if not exist ".venv\Scripts\python.exe" (
   if not defined PY (
     echo.
     echo [!] Python belum terpasang.
-    echo     Install dari https://www.python.org/downloads/
-    echo     dan CENTANG "Add python.exe to PATH" saat instalasi.
+    echo     Klik dua kali Pasang_Tera.bat untuk memasang semuanya otomatis.
     echo.
     pause
     exit /b 1
@@ -33,10 +32,17 @@ if not exist ".venv\Scripts\python.exe" (
   echo Persiapan selesai.
 )
 
+rem Komponen yang ditambahkan di versi baru (pengolah gambar untuk Desain Konversi ke PRD)
+".venv\Scripts\python.exe" -c "import PIL" >nul 2>nul
+if errorlevel 1 (
+  echo Memasang komponen baru: pengolah gambar. Butuh internet sebentar...
+  ".venv\Scripts\python.exe" -m pip install pillow
+)
+
 where ollama >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo [!] Ollama belum terpasang. Install dari https://ollama.com/download
+  echo [!] Ollama belum terpasang. Klik dua kali Pasang_Tera.bat untuk memasangnya otomatis.
   echo     Tera tetap dibuka, tapi AI belum bisa dipakai sampai Ollama terpasang.
   echo.
 )

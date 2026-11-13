@@ -1,9 +1,10 @@
-# Tera — Asisten QA berbasis AI
+# TƎRᗩ — Asisten QA berbasis AI
 
-Tera membantu QA:
+TƎRᗩ membantu QA:
 
-- **Catatan Konversi ke PRD**: catatan QA yang berantakan (notulen, chat, poin-poin) disusun menjadi dokumen PRD yang rapi. Tera tidak mengarang; hal yang belum jelas dikumpulkan di catatan review (PDF) terpisah.
-- **Generator Test Case PRD**: dari dokumen PRD, Tera membuat test case lengkap (Excel), lalu memeriksanya dengan AI kedua.
+- **Catatan Konversi ke PRD**: catatan QA yang berantakan (notulen, chat, poin-poin) disusun menjadi dokumen PRD yang rapi. TƎRᗩ tidak mengarang; hal yang belum jelas dikumpulkan di catatan review (PDF) terpisah.
+- **Desain Konversi ke PRD**: gambar desain (export Figma atau screenshot) per halaman, plus penjelasan opsional, disusun menjadi PRD. Teks di gambar dibaca persis oleh pembaca teks bawaan Windows; AI hanya menentukan jenisnya (tombol, field, label, dan seterusnya).
+- **Generator Test Case PRD**: dari dokumen PRD, TƎRᗩ membuat test case lengkap (Excel), lalu memeriksanya dengan AI kedua.
 
 Semua berjalan **di laptop sendiri**. Data tidak dikirim ke internet, dan tidak perlu akun atau API key.
 
@@ -25,48 +26,46 @@ Perkiraan waktu tanpa GPU: konversi catatan beberapa menit, pembuatan test case 
 
 ---
 
-## 2. Yang perlu di-install (sekali saja)
+## 2. Pemasangan sekali klik
 
-### a. Python
+1. Buka folder TƎRᗩ, lalu klik dua kali **`Pasang_Tera.bat`**.
+2. Tunggu sampai tertulis **SELESAI**. Pertama kali bisa cukup lama (sekitar 15 GB unduhan model AI), jadi pastikan internet stabil dan laptop dicolok charger.
+3. Di akhir, ketik **Y** lalu Enter untuk langsung membuka TƎRᗩ.
 
-1. Buka <https://www.python.org/downloads/> lalu klik tombol **Download Python** (versi terbaru).
-2. Jalankan file yang terunduh.
-3. **PENTING:** di layar pertama instalasi, centang **"Add python.exe to PATH"**, lalu klik **Install Now**.
-4. Tunggu sampai selesai, lalu klik **Close**.
+Yang dikerjakan otomatis (yang sudah ada akan dilewati):
 
-### b. Ollama (mesin AI lokal)
+| Langkah | Keterangan |
+|---|---|
+| Cek laptop | Windows 64-bit, RAM, ruang kosong minimal 20 GB, koneksi internet |
+| Python | Dipasang kalau belum ada (lewat winget, atau unduh langsung dari python.org) |
+| Ollama (mesin AI lokal) | Dipasang kalau belum ada, lalu dinyalakan |
+| Komponen TƎRᗩ | Folder `.venv` dan komponen dari `requirements.txt` |
+| Model AI | Nama model dibaca dari `configs\ai.json` (saat ini `gemma4:e4b` sebagai AI penulis dan `qwen2.5:7b` sebagai AI pemeriksa) |
+| Bahasa OCR | Bahasa Inggris untuk pembaca teks Windows (fitur Desain Konversi ke PRD). Windows akan meminta izin admin sekali |
+| Shortcut | Ikon **TERA** di Desktop untuk membuka TƎRᗩ berikutnya |
 
-1. Buka <https://ollama.com/download> lalu pilih **Windows**.
-2. Jalankan file yang terunduh, lalu ikuti sampai selesai.
-3. Setelah terpasang, ikon Ollama (kepala llama) muncul di pojok kanan bawah taskbar. Artinya Ollama sudah menyala.
+Kalau gagal di tengah jalan, baca pesan merahnya, perbaiki (biasanya internet atau ruang kosong), lalu klik dua kali `Pasang_Tera.bat` lagi. Unduhan model dilanjutkan, tidak mulai dari nol. Catatan lengkap pemasangan tersimpan di `pasang_tera.log`.
 
-### c. Model AI
+<details><summary>Pemasangan manual (kalau pemasang otomatis tidak bisa dipakai)</summary>
 
-Model AI cukup diunduh sekali, ukurannya sekitar 15 GB.
+1. **Python**: unduh dari <https://www.python.org/downloads/>. Di layar pertama instalasi, centang **"Add python.exe to PATH"**, lalu **Install Now**.
+2. **Ollama**: unduh dari <https://ollama.com/download> (Windows), lalu pasang sampai selesai.
+3. **Model AI**: buka PowerShell, lalu ketik `ollama pull gemma4:e4b` dan `ollama pull qwen2.5:7b`.
+4. Jalankan `Jalankan_Tera.bat`. Pertama kali ia membuat folder `.venv` dan memasang komponen sendiri.
 
-- Cara mudah: klik dua kali file **`Siapkan_Model_AI.bat`** di folder Tera, lalu tunggu sampai tertulis selesai.
-- Cara manual: buka **PowerShell** (tekan tombol Windows, ketik `PowerShell`, Enter), lalu ketik:
-
-```
-ollama pull gemma4:e4b
-ollama pull qwen2.5:7b
-```
-
-`gemma4:e4b` bertugas sebagai **AI penulis**, sedangkan `qwen2.5:7b` bertugas sebagai **AI pemeriksa**.
+</details>
 
 ---
 
-## 3. Menjalankan Tera
+## 3. Menjalankan TƎRᗩ
 
 1. Pastikan **Ollama menyala**: ikon llama ada di taskbar. Kalau belum ada, buka aplikasi Ollama dari Start Menu.
-2. Buka folder Tera, lalu klik dua kali **`Jalankan_Tera.bat`**.
-   - **Pertama kali:** Tera menyiapkan dirinya sendiri. Ia membuat folder `.venv` dan memasang komponen yang dibutuhkan. Proses ini butuh beberapa menit dan internet.
-   - **Berikutnya:** langsung jalan.
-3. Browser akan terbuka sendiri ke alamat **http://127.0.0.1:8765**. Itulah dashboard Tera.
-4. **Jangan tutup jendela hitam** (Command Prompt) selama Tera dipakai. Browser boleh ditutup dan dibuka lagi lewat alamat di atas.
-5. Untuk mematikan Tera, klik jendela hitam itu lalu tekan **Ctrl + C**, atau tutup jendelanya.
+2. Klik dua kali ikon **TERA** di Desktop (atau `Jalankan_Tera.bat` di folder TƎRᗩ).
+3. Browser akan terbuka sendiri ke alamat **http://127.0.0.1:8765**. Itulah dashboard TƎRᗩ.
+4. **Jangan tutup jendela hitam** (Command Prompt) selama TƎRᗩ dipakai. Browser boleh ditutup dan dibuka lagi lewat alamat di atas.
+5. Untuk mematikan TƎRᗩ, klik jendela hitam itu lalu tekan **Ctrl + C**, atau tutup jendelanya.
 
-Kalau Windows menampilkan peringatan **"Windows protected your PC"** saat membuka file `.bat`, klik **More info**, lalu **Run anyway**. File `.bat` ini hanya berisi perintah untuk menjalankan Tera dan bisa dibuka dengan Notepad untuk dicek.
+Kalau Windows menampilkan peringatan **"Windows protected your PC"** saat membuka file `.bat`, klik **More info**, lalu **Run anyway**. File `.bat` ini hanya berisi perintah untuk menjalankan TƎRᗩ dan bisa dibuka dengan Notepad untuk dicek.
 
 ---
 
@@ -80,6 +79,23 @@ Kalau Windows menampilkan peringatan **"Windows protected your PC"** saat membuk
    - Baca pertanyaannya, lalu klik **Unduh catatan review (PDF)** untuk ditanyakan ke tim.
    - Edit PRD bila perlu, lalu klik **Simpan perubahan**.
    - Klik **Buat test case dari PRD ini**.
+
+### Desain ke PRD
+
+1. Menu **Konversi Dokumen**, lalu **Desain Konversi ke PRD**.
+2. Isi **Nama modul**.
+3. Untuk setiap halaman atau fitur, isi satu kartu:
+   - **Nama halaman / fitur**, misalnya `Add User`.
+   - **Penjelasan** (opsional): aturan yang tidak terlihat di gambar, misalnya siapa yang boleh mengakses atau batas karakter.
+   - **Gambar**: klik **Tambah gambar** atau seret file ke kotaknya. Boleh banyak. Satu gambar boleh berisi beberapa layar berjajar (papan alur); TƎRᗩ memotongnya sendiri dan membaca urutannya dari kiri ke kanan.
+4. Klik **+ Tambah halaman / fitur** untuk kartu berikutnya. **Deskripsi tambahan** di bawah untuk aturan yang berlaku umum.
+5. Klik **Susun PRD**. Perkiraan waktunya tampil di samping tombol (kira-kira 2–3 menit per layar di laptop tanpa GPU).
+6. Setelah selesai, sama seperti Catatan ke PRD: baca hal yang perlu dicek, unduh catatan review (PDF), edit PRD bila perlu, lalu **Buat test case dari PRD ini**.
+
+Tips gambar:
+- Export dari Figma: pilih frame, di panel kanan bagian **Export** pilih **PNG** ukuran **2x**, lalu klik Export.
+- Bagian yang diburamkan di belakang modal atau panel otomatis diabaikan.
+- Fitur ini memakai pembaca teks bawaan Windows, jadi hanya berjalan di Windows.
 
 ### Membuat test case dari PRD
 
@@ -100,9 +116,10 @@ Semua proses tercatat di menu **Riwayat**.
 
 | Isi | Folder |
 |---|---|
-| Dokumen PRD (termasuk hasil konversi catatan) | `knowledge\prd\` |
+| Dokumen PRD (termasuk hasil konversi catatan dan desain) | `knowledge\prd\` |
 | Excel test case | `outputs\` |
 | Hasil konversi catatan (PRD, catatan review PDF, catatan asli) | `outputs\free_text_to_prd\` |
+| Hasil konversi desain (PRD, catatan review PDF, gambar asli, potongan layar) | `outputs\design_to_prd\` |
 | Riwayat setiap proses pembuatan test case | `runs\` |
 | Contoh test case perusahaan (acuan gaya penulisan AI) | `knowledge\company_testcases\` |
 
@@ -112,24 +129,46 @@ Semua proses tercatat di menu **Riwayat**.
 
 | Masalah | Solusi |
 |---|---|
-| `'python' is not recognized` | Python belum terpasang atau "Add python.exe to PATH" lupa dicentang. Install ulang Python dan centang pilihan itu. |
+| `'python' is not recognized` | Python belum terpasang. Jalankan `Pasang_Tera.bat`. |
 | Di dashboard tertulis **AI belum aktif** | Buka aplikasi Ollama, lalu klik **Periksa ulang** di halaman Mulai baru. |
-| Di dashboard tertulis **AI belum lengkap** | Model belum diunduh. Jalankan `Siapkan_Model_AI.bat`. |
-| Di dashboard tertulis **Tera tidak terhubung** | Jendela hitam Tera tertutup. Klik dua kali `Jalankan_Tera.bat` lagi. |
+| Di dashboard tertulis **AI belum lengkap** | Model belum diunduh. Jalankan `Pasang_Tera.bat`. |
+| Di dashboard tertulis **TƎRᗩ tidak terhubung** | Jendela hitam TƎRᗩ tertutup. Klik dua kali `Jalankan_Tera.bat` lagi. |
 | Browser tidak terbuka otomatis | Buka browser dan ketik `http://127.0.0.1:8765`. |
-| `address already in use` / port dipakai | Tera sudah berjalan di jendela lain. Pakai yang itu, atau tutup jendela lama dulu. |
-| Instalasi pertama gagal di tengah jalan | Cek internet, hapus folder `.venv`, lalu jalankan `Jalankan_Tera.bat` lagi. |
+| `address already in use` / port dipakai | TƎRᗩ sudah berjalan di jendela lain. Pakai yang itu, atau tutup jendela lama dulu. |
+| Pemasangan gagal di tengah jalan | Cek internet dan ruang kosong, lalu klik dua kali `Pasang_Tera.bat` lagi. Kalau masih gagal, hapus folder `.venv` lalu ulangi. Detailnya ada di `pasang_tera.log`. |
+| Desain ke PRD: **"Tidak ada bahasa OCR terpasang"** | Pasang bahasa Inggris di Windows: Settings > Time & language > Language & region > Add a language > English. |
+| Desain ke PRD: **"Pillow belum terpasang"** | Tutup TƎRᗩ, lalu jalankan `Pasang_Tera.bat` (komponennya dipasang otomatis, butuh internet). |
 | Proses test case sangat lama | Wajar di laptop tanpa GPU. Tutup aplikasi berat lain, colokkan charger, dan biarkan berjalan. |
 
 ---
 
-## 7. Untuk yang membagikan Tera ke orang lain
+## 7. Untuk yang membagikan TƎRᗩ ke orang lain
 
-Saat menyalin atau meng-zip folder Tera untuk teman, **jangan ikut sertakan**:
+Saat menyalin atau meng-zip folder TƎRᗩ untuk teman, **jangan ikut sertakan**:
 
-- `.venv\` (besar dan khusus untuk laptop kamu; teman akan membuat sendiri secara otomatis)
+- `.venv\` (besar dan khusus untuk laptop kamu; `Pasang_Tera.bat` di laptop teman akan membuatnya sendiri)
 - `.env` (bisa berisi data rahasia)
 - `runs\` dan `outputs\` (hasil kerja kamu)
-- `__pycache__\` (file sementara)
+- `__pycache__\`, `.vs\`, dan `pasang_tera.log` (file sementara)
+
+Teman cukup menerima folder TƎRᗩ, lalu klik dua kali `Pasang_Tera.bat`.
 
 Cek juga isi `knowledge\prd\` dan `knowledge\company_testcases\`. Kalau berisi dokumen internal kantor, pastikan memang boleh dibagikan sebelum ikut disalin.
+
+---
+
+## 8. Isi folder TƎRᗩ
+
+| File / folder | Fungsi |
+|---|---|
+| `Pasang_Tera.bat` | Pemasang sekali klik (Python, Ollama, komponen, model AI, bahasa OCR, ikon Desktop) |
+| `Jalankan_Tera.bat` | Membuka TƎRᗩ setiap kali mau dipakai |
+| `setup\` | Script pemasang yang dipanggil `Pasang_Tera.bat` |
+| `dashboard.py`, `dashboard\` | Dashboard TƎRᗩ (tampilan di browser) |
+| `run.py`, `agents\`, `tc_workflows\` | Mesin Generator Test Case PRD |
+| `free_text_to_prd\` | Mesin Catatan Konversi ke PRD |
+| `design_to_prd\` | Mesin Desain Konversi ke PRD (potong layar, baca teks, susun PRD) |
+| `tools\` | Bagian bersama: koneksi AI, pembaca PRD, aturan validasi isian, dan lainnya |
+| `configs\ai.json` | Pengaturan AI (juga bisa diubah dari menu Pengaturan) |
+| `knowledge\` | Dokumen PRD, contoh test case perusahaan, dan daftar istilah terlarang |
+| `requirements.txt` | Daftar komponen Python yang dipasang otomatis |

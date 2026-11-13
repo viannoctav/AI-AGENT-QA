@@ -1,6 +1,7 @@
-# Komponen Python yang dibutuhkan Tera (dipasang otomatis oleh Jalankan_Tera.bat)
+# Komponen Python yang dibutuhkan Tera (dipasang otomatis oleh Pasang_Tera.bat)
 ollama
 langgraph
 openpyxl
 pandas
 rich
+pillow

@@ -3,24 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tera — Asisten QA berbasis AI</title>
+<title>TƎRᗩ — Asisten QA berbasis AI</title>
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="splash" class="splash" role="dialog" aria-modal="true" aria-labelledby="splash-title">
+    <div class="splash-inner">
+      <img class="splash-logo" src="logo-full.png" alt="" width="900" height="520">
+      <h1 id="splash-title" class="sr-only">TƎRᗩ</h1>
+      <p class="splash-tag">Asisten QA berbasis AI</p>
+      <button type="button" class="btn btn-primary splash-btn" id="splash-enter">Masuk</button>
+      <p class="splash-note">Berjalan di laptop ini. Data tidak dikirim ke internet.</p>
+    </div>
+  </div>
 <div class="shell">
   <nav class="nav" aria-label="Navigasi utama">
     <div class="brand">
       <img class="brand-mark" src="logo-mark.png" alt="" height="38">
-      <div><img class="brand-word" src="logo-word.png" alt="Tera" height="19"><span>Asisten QA berbasis AI</span></div>
+      <div><img class="brand-word" src="logo-word.png" alt="TƎRᗩ" height="19"><span>Asisten QA berbasis AI</span></div>
     </div>
     <div class="nav-links">
       <a href="#beranda" data-view="beranda">Beranda</a>
       <div class="nav-group" role="group" aria-labelledby="ng-konversi">
         <span class="nav-group-title" id="ng-konversi">Konversi Dokumen</span>
         <a class="sub" href="#catatan" data-view="catatan"><span>Catatan Konversi ke PRD</span></a>
+        <a class="sub" href="#desain" data-view="desain"><span>Desain Konversi ke PRD</span></a>
       </div>
       <div class="nav-group" role="group" aria-labelledby="ng-gen">
         <span class="nav-group-title" id="ng-gen">Generator Test Case PRD</span>
@@ -33,6 +43,7 @@
       <a href="#riwayat" data-view="riwayat">Riwayat</a>
     </div>
     <div class="nav-links nav-bottom">
+      <a href="#alur" data-view="alur">Alur Kerja</a>
       <a href="#pengaturan" data-view="pengaturan">Pengaturan</a>
     </div>
     <div class="nav-status" aria-live="polite" hidden>

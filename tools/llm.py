@@ -111,7 +111,7 @@ def parse_json_loose(text: str) -> Optional[Any]:
 
 
 def chat_json(model: str, system: str, prompt: str, *, temperature: Optional[float] = None,
-              num_predict: Optional[int] = None, retries: int = 2) -> Optional[Any]:
+              num_predict: Optional[int] = None, retries: int = 2, images: Optional[list] = None) -> Optional[Any]:
     cfg = settings()
     opts_base = {
         "temperature": cfg["temperature"] if temperature is None else temperature,
@@ -123,8 +123,10 @@ def chat_json(model: str, system: str, prompt: str, *, temperature: Optional[flo
     for i in range(retries + 1):
         opts = dict(opts_base)
         opts["temperature"] = min(0.7, opts["temperature"] + 0.15 * i)
-        kwargs = dict(model=model, messages=[{"role": "system", "content": system},
-                                             {"role": "user", "content": prompt}],
+        user = {"role": "user", "content": prompt}
+        if images:  # model yang bisa melihat gambar (mis. gemma4): path file gambar
+            user["images"] = [str(x) for x in images]
+        kwargs = dict(model=model, messages=[{"role": "system", "content": system}, user],
                       format="json", options=opts)
         if cfg.get("think") is False and model not in _NO_THINK:
             kwargs["think"] = False  # qwen3/gemma4/gpt-oss: matikan mode berpikir (token & waktu membengkak di CPU)
