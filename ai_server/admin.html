@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Server AI TƎRᗩ</title>
+<link rel="icon" href="/admin/logo.ico">
+<style>
+:root {
+  --bg: #F4F3FA; --card: #FFFFFF; --ink: #141A3F; --muted: #555B7A; --line: #DCDCEA; --input: #BCBFD6;
+  --accent: #5626E8; --accent-ink: #3F16BE; --accent-soft: #F0EBFF; --ok: #1E6B45; --ok-bg: #E3F3EA;
+  --err: #B3261E; --err-bg: #FBE4E2; --warn: #6B3A00; --warn-bg: #FCEFD9;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 64px; display: flex; flex-direction: column; gap: 20px; }
+h1 { margin: 0; font-size: 26px; } h2 { margin: 0; font-size: 18px; }
+p { margin: 0; }
+.muted { color: var(--muted); } .small { font-size: 14px; } .tiny { font-size: 13px; }
+.mono { font-family: var(--mono); font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.status { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.status li { display: flex; gap: 10px; align-items: flex-start; }
+.dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 7px; flex: none; }
+.dot.ok { background: var(--ok); } .dot.err { background: var(--err); } .dot.warn { background: #C77A00; }
+.copy { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.copy code { background: var(--accent-soft); padding: 6px 10px; border-radius: 8px; font-family: var(--mono); font-size: 14px; }
+form { display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-weight: 500; font-size: 14px; }
+.field input { font: inherit; font-weight: 400; padding: 9px 11px; border: 1px solid var(--input); border-radius: 8px; background: #fff; color: var(--ink); }
+.field input:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint { font-weight: 400; color: var(--muted); font-size: 13px; }
+.has-err input { border-color: var(--err); background: var(--err-bg); }
+.err-msg { color: var(--err); font-weight: 400; font-size: 13px; }
+.btn { font: inherit; font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--input); background: #fff; color: var(--ink); cursor: pointer; }
+.btn:hover { background: var(--accent-soft); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-ink); }
+.btn-danger { color: var(--err); border-color: #E3B4B0; }
+.btn-danger.confirm { background: var(--err); color: #fff; border-color: var(--err); }
+.btn-small { padding: 4px 10px; font-size: 13px; }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 840px; font-size: 14px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 13px; color: var(--muted); font-weight: 500; }
+td.r, th.r { text-align: right; } .num { font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.pill.on { background: var(--ok-bg); color: var(--ok); } .pill.off { background: #ECECF2; color: var(--muted); } .pill.lock { background: var(--warn-bg); color: var(--warn); }
+.acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+tr.reset td { background: #FAF9FE; }
+.reset-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.banner { padding: 12px 16px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: 14px; }
+.banner.error { background: var(--err-bg); color: var(--err); }
+#toast { position: fixed; bottom: 20px; right: 20px; background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transform: translateY(8px); transition: opacity .2s, transform .2s; pointer-events: none; }
+#toast.show { opacity: 1; transform: none; }
+#toast.err { background: var(--err); }
+ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 640px) { .reset-form { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Admin Server AI TƎRᗩ</h1>
+    <p class="muted">Halaman ini hanya bisa dibuka dari komputer server. Teman memakai AI dari laptopnya sendiri lewat Tailscale; data PRD dan test case tetap di laptop masing-masing.</p></header>
+  <div id="banners"></div>
+  <div class="grid">
+    <section class="card" aria-labelledby="st-title"><h2 id="st-title">Status server</h2>
+      <ul class="status" id="status"><li class="muted">Memuat...</li></ul>
+      <form id="ver-form" novalidate autocomplete="off" style="border-top:1px solid var(--line);padding-top:14px">
+        <label class="field" for="s-minver">Versi TƎRᗩ minimal untuk teman<input id="s-minver" maxlength="14" spellcheck="false" placeholder="Tidak dibatasi">
+          <span class="hint" id="s-minver-hint">Teman dengan versi lebih lama tidak bisa memakai AI sampai memperbarui TƎRᗩ. Kosongkan bila tidak dibatasi.</span></label>
+        <div><button class="btn" type="submit">Simpan versi minimal</button></div>
+      </form></section>
+    <section class="card" aria-labelledby="new-title"><h2 id="new-title">Buat akun baru</h2>
+      <form id="new-user" novalidate autocomplete="off">
+        <label class="field" for="u-name">Nama pengguna<input id="u-name" autocomplete="off" maxlength="32" spellcheck="false">
+          <span class="hint">3–32 karakter: huruf kecil, angka, titik, garis bawah, atau minus. Diawali huruf.</span></label>
+        <label class="field" for="u-pass">Password awal<input id="u-pass" type="password" autocomplete="new-password" maxlength="128">
+          <span class="hint">Minimal 8 karakter, berisi huruf dan angka. Berikan ke temanmu lewat chat pribadi.</span></label>
+        <label class="field" for="u-pass2">Ulangi password<input id="u-pass2" type="password" autocomplete="new-password" maxlength="128"></label>
+        <div><button class="btn btn-primary" type="submit">Buat akun</button></div>
+      </form></section>
+  </div>
+  <section class="card" aria-labelledby="us-title"><h2 id="us-title">Akun</h2>
+    <p class="small muted">Pemakaian dihitung 30 hari terakhir. Yang dicatat hanya jumlah permintaan, lama proses, dan jumlah token, bukan isi dokumennya.</p>
+    <div id="users"><p class="muted">Memuat...</p></div></section>
+  <section class="card" aria-labelledby="how-title"><h2 id="how-title">Cara teman terhubung</h2>
+    <ol class="small">
+      <li>Bagikan komputer ini ke temanmu dari Tailscale: buka <b>login.tailscale.com</b> &gt; Machines &gt; titik tiga di komputer ini &gt; <b>Share</b>.</li>
+      <li>Teman memasang Tailscale, masuk, dan menerima undangan itu.</li>
+      <li>Teman membuka TƎRᗩ &gt; Pengaturan &gt; Sumber AI &gt; <b>Server AI bersama</b>, lalu mengisi alamat server, nama pengguna, dan password dari kamu.</li>
+    </ol></section>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+"use strict";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtDate = (t) => (t ? new Date(t * 1000).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : "-");
+const num = (n) => Number(n || 0).toLocaleString("id-ID");
+const dur = (s) => { s = Math.round(s || 0); if (s < 60) return `${s} dtk`; const m = Math.round(s / 60); return m < 60 ? `${m} mnt` : `${Math.floor(m / 60)} jam ${m % 60} mnt`; };
+
+async function api(path, opt = {}) {
+  const r = await fetch(path, { method: opt.method || "GET", headers: { "X-Tera-Admin": "1", ...(opt.body ? { "Content-Type": "application/json" } : {}) },
+    body: opt.body ? JSON.stringify(opt.body) : undefined });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d.detail || d.error || `Gagal (${r.status})`); e.field = d.field; throw e; }
+  return d;
+}
+
+let toastTimer;
+function toast(msg, err) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = `show${err ? " err" : ""}`;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.className = ""), 3500);
+}
+
+/* validasi: aturan sama dengan tools/form_rules.py */
+const V = {
+  username(v) {
+    if (!v.trim()) return "Nama pengguna wajib diisi.";
+    if (v !== v.trim() || v.includes(" ")) return "Nama pengguna tidak boleh memakai spasi.";
+    if (v.length < 3 || v.length > 32) return "Nama pengguna harus 3–32 karakter.";
+    if (v !== v.toLowerCase()) return "Nama pengguna memakai huruf kecil semua.";
+    if (!/^[a-z][a-z0-9._-]*$/.test(v)) return "Nama pengguna diawali huruf, lalu hanya huruf kecil, angka, titik, garis bawah, atau tanda minus.";
+    return "";
+  },
+  password(v, user) {
+    if (!v) return "Password wajib diisi.";
+    if (v.length < 8) return "Password minimal 8 karakter.";
+    if (v.length > 128) return "Password maksimal 128 karakter.";
+    if (v !== v.trim()) return "Password tidak boleh diawali atau diakhiri spasi.";
+    if (!/[A-Za-z]/.test(v) || !/\d/.test(v)) return "Password harus berisi huruf dan angka.";
+    if (user && v.toLowerCase().includes(user.toLowerCase())) return "Password tidak boleh mengandung nama pengguna.";
+    if (new Set(v.toLowerCase()).size < 4) return "Password terlalu mudah ditebak.";
+    return "";
+  },
+};
+function setErr(id, msg) {
+  const el = document.getElementById(id); if (!el) return;
+  const wrap = el.closest(".field"); clearErr(id);
+  if (!msg) return;
+  wrap.classList.add("has-err"); el.setAttribute("aria-invalid", "true");
+  const m = document.createElement("span"); m.className = "err-msg"; m.id = `${id}-err`; m.textContent = msg;
+  wrap.appendChild(m); el.setAttribute("aria-describedby", m.id);
+}
+function clearErr(id) {
+  const el = document.getElementById(id); if (!el) return;
+  const wrap = el.closest(".field"); wrap.classList.remove("has-err"); el.removeAttribute("aria-invalid");
+  const m = document.getElementById(`${id}-err`); if (m) m.remove(); el.removeAttribute("aria-describedby");
+}
+function report(list) {
+  let first = null;
+  for (const [id, msg] of list) { setErr(id, msg); if (msg && !first) first = id; }
+  if (first) document.getElementById(first).focus();
+  return !first;
+}
+
+let STATE = null;
+async function load() {
+  try { STATE = await api("/admin/api/state"); } catch (e) {
+    document.getElementById("banners").innerHTML = `<div class="banner error">${esc(e.message)}</div>`; return;
+  }
+  const s = STATE, b = [];
+  if (s.ollama_exposed) b.push(`<div class="banner error"><b>Ollama terbuka ke jaringan.</b> Orang bisa memakai AI tanpa login. Hapus pengaturan OLLAMA_HOST di Windows, lalu nyalakan ulang Ollama.</div>`);
+  document.getElementById("banners").innerHTML = b.join("");
+  const rows = [
+    [s.ollama ? "ok" : "err", s.ollama ? "Mesin AI (Ollama) menyala" : "Mesin AI (Ollama) mati", s.ollama ? "Hanya bisa diakses dari komputer ini" : "Buka aplikasi Ollama di komputer ini"],
+    [s.address ? "ok" : "err", s.address ? "Tailscale tersambung" : "Tailscale belum tersambung", s.address ? "" : "Pasang Tailscale, masuk, lalu muat ulang halaman ini"],
+  ];
+  document.getElementById("status").innerHTML = rows.map(([k, t, sub]) => `<li><span class="dot ${k}" aria-hidden="true"></span><span><b>${esc(t)}</b>${sub ? `<br><span class="tiny muted">${esc(sub)}</span>` : ""}</span></li>`).join("")
+    + `<li><span class="dot ok" aria-hidden="true"></span><span><b>TƎRᗩ versi ${esc(s.server_version)}</b>${s.min_version ? `<br><span class="tiny muted">Teman wajib minimal versi ${esc(s.min_version)}</span>` : ""}</span></li>`
+    + (s.address ? `<li><span class="dot ok" aria-hidden="true"></span><span><b>Alamat untuk teman</b><br><span class="copy"><code id="addr">${esc(s.address)}</code><button class="btn btn-small" type="button" data-act="copy">Salin</button></span></span></li>` : "");
+  const mv = document.getElementById("s-minver");
+  if (mv && document.activeElement !== mv) mv.value = s.min_version || "";
+  document.getElementById("s-minver-hint").textContent = `Server ini versi ${s.server_version}. Teman dengan versi lebih lama dari angka ini tidak bisa memakai AI sampai memperbarui TƎRᗩ. Kosongkan bila tidak dibatasi.`;
+  renderUsers();
+}
+
+const verTuple = (v) => (/^\d+\.\d+\.\d+$/.test(v || "") ? v.split(".").map(Number) : null);
+function older(a, b) {
+  const pb = verTuple(b); if (!pb) return false;
+  const pa = verTuple(a); if (!pa) return true;
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i];
+  return false;
+}
+function versionCell(v) {
+  if (!v) return `<span class="muted">-</span>`;
+  const blocked = STATE.min_version && older(v, STATE.min_version);
+  const old = older(v, STATE.server_version);
+  return `<span class="num">${esc(v)}</span>${blocked ? ` <span class="pill off">Ditolak</span>` : old ? ` <span class="pill lock">Lama</span>` : ""}`;
+}
+
+let openReset = null, confirmDel = null;
+function renderUsers() {
+  const users = STATE.users || [];
+  const box = document.getElementById("users");
+  if (!users.length) { box.innerHTML = `<p class="muted">Belum ada akun. Buat akun pertama untuk temanmu (atau untuk dirimu sendiri).</p>`; return; }
+  box.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Nama pengguna</th><th>Status</th><th>Versi</th><th>Terakhir masuk</th><th class="r">Permintaan</th><th class="r">Lama proses</th><th class="r">Token</th><th class="r">Aksi</th></tr></thead><tbody>
+    ${users.map((u) => `<tr><td class="mono">${esc(u.username)}</td>
+      <td><span class="pill ${u.active ? "on" : "off"}">${u.active ? "Aktif" : "Nonaktif"}</span>${u.locked ? ` <span class="pill lock">Terkunci sementara</span>` : ""}
+        <br><span class="tiny muted">${u.sessions} perangkat masuk</span></td>
+      <td class="small">${versionCell(u.version)}</td>
+      <td class="small">${esc(fmtDate(u.last_login))}</td>
+      <td class="r num">${num(u.requests)}</td><td class="r num">${esc(dur(u.seconds))}</td><td class="r num">${num(u.tokens)}</td>
+      <td><div class="acts">
+        <button class="btn btn-small" type="button" data-act="reset" data-user="${esc(u.username)}" aria-expanded="${openReset === u.username}">Ganti password</button>
+        <button class="btn btn-small" type="button" data-act="toggle" data-user="${esc(u.username)}" data-active="${u.active ? 0 : 1}">${u.active ? "Nonaktifkan" : "Aktifkan"}</button>
+        <button class="btn btn-small btn-danger ${confirmDel === u.username ? "confirm" : ""}" type="button" data-act="delete" data-user="${esc(u.username)}">${confirmDel === u.username ? "Yakin hapus?" : "Hapus"}</button>
+      </div></td></tr>
+      ${openReset === u.username ? `<tr class="reset"><td colspan="8"><form class="reset-form" data-user="${esc(u.username)}" novalidate>
+        <label class="field" for="r-pass">Password baru untuk ${esc(u.username)}<input id="r-pass" type="password" autocomplete="new-password" maxlength="128"></label>
+        <label class="field" for="r-pass2">Ulangi password<input id="r-pass2" type="password" autocomplete="new-password" maxlength="128"></label>
+        <div class="acts"><button class="btn btn-primary btn-small" type="submit">Simpan</button><button class="btn btn-small" type="button" data-act="reset-cancel">Batal</button></div>
+        <span class="tiny muted" style="grid-column:1/-1">Semua perangkat akun ini akan keluar dan harus masuk lagi dengan password baru.</span>
+      </form></td></tr>` : ""}`).join("")}
+  </tbody></table></div>`;
+  if (openReset) document.getElementById("r-pass")?.focus();
+}
+
+document.getElementById("new-user").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const u = document.getElementById("u-name").value, p = document.getElementById("u-pass").value, p2 = document.getElementById("u-pass2").value;
+  const vu = V.username(u);
+  if (!report([["u-name", vu], ["u-pass", V.password(p, vu ? "" : u)], ["u-pass2", p2 ? (p2 === p ? "" : "Ulangi password belum sama.") : "Ulangi password wajib diisi."]])) return;
+  try {
+    await api("/admin/api/users", { method: "POST", body: { username: u, password: p, password2: p2 } });
+    ev.target.reset(); toast(`Akun ${u} dibuat`); load();
+  } catch (e) { if (e.field) report([[e.field, e.message]]); else toast(e.message, true); }
+});
+document.getElementById("ver-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const v = document.getElementById("s-minver").value.trim();
+  let err = "";
+  if (v && !/^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(v)) err = "Format versi tiga angka dipisah titik, misalnya 1.1.0.";
+  else if (v && older(STATE.server_version, v)) err = `Versi minimal tidak boleh lebih baru dari versi server ini (${STATE.server_version}).`;
+  if (!report([["s-minver", err]])) return;
+  try {
+    await api("/admin/api/settings", { method: "POST", body: { min_version: v } });
+    toast(v ? `Teman wajib memakai TƎRᗩ minimal versi ${v}` : "Versi teman tidak dibatasi"); document.getElementById("s-minver").blur(); load();
+  } catch (e) { if (e.field) report([[e.field, e.message]]); else toast(e.message, true); }
+});
+document.getElementById("ver-form").addEventListener("input", (ev) => { if (ev.target.id) clearErr(ev.target.id); });
+document.getElementById("new-user").addEventListener("input", (ev) => { if (ev.target.id) clearErr(ev.target.id); });
+
+document.addEventListener("submit", async (ev) => {
+  const f = ev.target.closest(".reset-form"); if (!f) return;
+  ev.preventDefault();
+  const user = f.dataset.user, p = document.getElementById("r-pass").value, p2 = document.getElementById("r-pass2").value;
+  if (!report([["r-pass", V.password(p, user)], ["r-pass2", p2 ? (p2 === p ? "" : "Ulangi password belum sama.") : "Ulangi password wajib diisi."]])) return;
+  try {
+    await api(`/admin/api/users/${encodeURIComponent(user)}/password`, { method: "POST", body: { password: p, password2: p2 } });
+    openReset = null; toast(`Password ${user} diganti`); load();
+  } catch (e) { if (e.field) report([[e.field, e.message]]); else toast(e.message, true); }
+});
+document.addEventListener("input", (ev) => { if (ev.target.closest(".reset-form") && ev.target.id) clearErr(ev.target.id); });
+
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-act]"); if (!b) return;
+  const user = b.dataset.user, act = b.dataset.act;
+  if (act !== "delete") confirmDel = null;
+  try {
+    if (act === "copy") { await navigator.clipboard.writeText(document.getElementById("addr").textContent); toast("Alamat disalin"); return; }
+    if (act === "reset") { openReset = openReset === user ? null : user; renderUsers(); return; }
+    if (act === "reset-cancel") { openReset = null; renderUsers(); return; }
+    if (act === "toggle") {
+      await api(`/admin/api/users/${encodeURIComponent(user)}/active`, { method: "POST", body: { active: b.dataset.active === "1" } });
+      toast(b.dataset.active === "1" ? `${user} diaktifkan` : `${user} dinonaktifkan dan dikeluarkan dari semua perangkat`); load(); return;
+    }
+    if (act === "delete") {
+      if (confirmDel !== user) { confirmDel = user; renderUsers(); return; }
+      confirmDel = null;
+      await api(`/admin/api/users/${encodeURIComponent(user)}`, { method: "DELETE" });
+      toast(`Akun ${user} dihapus`); load();
+    }
+  } catch (e) { toast(e.message, true); }
+});
+
+load();
+setInterval(() => { if (!openReset && !confirmDel && !document.activeElement?.closest("form")) load(); }, 15000);
+</script>
+</body>
+</html>

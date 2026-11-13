@@ -67,6 +67,13 @@ function Find-Ollama {
     if (Test-Path $p) { return $p }
     return $null
 }
+function Find-Tailscale {
+    $c = Get-Command tailscale -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    $p = "$env:ProgramFiles\Tailscale\tailscale.exe"
+    if (Test-Path $p) { return $p }
+    return $null
+}
 function Ollama-Up {
     try { Invoke-RestMethod -Uri $OLLAMA_API -TimeoutSec 3 -ErrorAction Stop | Out-Null; return $true } catch { return $false }
 }
@@ -77,6 +84,17 @@ Write-Host '  Pemasang TERA - Asisten QA berbasis AI'
 Write-Host '  Butuh internet. Model AI sekitar 15 GB, jadi bisa cukup lama.'
 Write-Host '  Jangan tutup jendela ini sampai tertulis SELESAI.'
 Write-Host '=============================================================='
+Write-Host ''
+Write-Host 'AI yang akan dipakai di laptop ini:'
+Write-Host '  1  AI di laptop ini sendiri (memasang Ollama dan model AI, unduhan sekitar 15 GB)'
+Write-Host '  2  Server AI bersama milik teman (tanpa unduh model AI, butuh akun dan Tailscale)'
+$Shared = $null
+while ($null -eq $Shared) {
+    $ans = (Read-Host 'Ketik 1 atau 2 lalu tekan Enter (kosong = 1)').Trim()
+    if ($ans -eq '' -or $ans -eq '1') { $Shared = $false }
+    elseif ($ans -eq '2') { $Shared = $true }
+    else { Write-Host '    Pilihan hanya 1 atau 2.' -ForegroundColor Yellow }
+}
 
 # 1. Cek laptop -------------------------------------------------------------
 Step 1 $TOTAL 'Memeriksa laptop'
@@ -86,7 +104,8 @@ if ($ramGB -lt 12) { Warn "RAM laptop $ramGB GB. Disarankan 16 GB; dengan RAM le
 else { Ok "RAM $ramGB GB" }
 $sysDrive = (Get-Item $env:USERPROFILE).PSDrive.Name
 $freeGB = [math]::Round((Get-PSDrive $sysDrive).Free / 1GB, 1)
-if ($freeGB -lt 20) { Fail "Ruang kosong di drive $($sysDrive): hanya $freeGB GB. Butuh minimal 20 GB untuk model AI. Kosongkan dulu lalu jalankan lagi." }
+$needGB = if ($Shared) { 3 } else { 20 }
+if ($freeGB -lt $needGB) { Fail "Ruang kosong di drive $($sysDrive): hanya $freeGB GB. Butuh minimal $needGB GB. Kosongkan dulu lalu jalankan lagi." }
 Ok "Ruang kosong drive $($sysDrive): $freeGB GB"
 try { Invoke-WebRequest -Uri 'https://ollama.com' -Method Head -TimeoutSec 15 -UseBasicParsing -ErrorAction Stop | Out-Null; Ok 'Internet tersambung' }
 catch { Fail 'Tidak bisa tersambung ke internet (ollama.com). Cek koneksi lalu jalankan lagi.' }
@@ -118,10 +137,29 @@ else {
     Ok "Python $($py.ver) terpasang"
 }
 
-# 3. Ollama -----------------------------------------------------------------
-Step 3 $TOTAL 'Ollama (mesin AI lokal)'
-$ollama = Find-Ollama
-if ($ollama) { Ok 'Sudah terpasang' }
+# 3. Ollama (AI di laptop ini) atau Tailscale (Server AI bersama) -----------
+if ($Shared) {
+    Step 3 $TOTAL 'Tailscale (jalur aman ke Server AI bersama)'
+    if (Find-Tailscale) { Ok 'Sudah terpasang' }
+    else {
+        Info 'Belum ada. Memasang Tailscale...'
+        if (Has-Winget) {
+            try { winget install -e --id tailscale.tailscale --silent --accept-package-agreements --accept-source-agreements } catch { Warn 'winget gagal, mencoba unduh langsung' }
+        }
+        Refresh-Path
+        if (-not (Find-Tailscale)) {
+            $tmp = Join-Path $env:TEMP 'tailscale-setup.exe'
+            try { Download 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' $tmp } catch { Fail 'Gagal mengunduh Tailscale. Cek internet lalu jalankan lagi.' }
+            $p = Start-Process -ErrorAction Stop -FilePath $tmp -ArgumentList '/quiet' -Wait -PassThru
+            if ($p.ExitCode -ne 0) { Warn "Pemasang Tailscale selesai dengan kode $($p.ExitCode)." }
+        }
+        if (Find-Tailscale) { Ok 'Tailscale terpasang' } else { Warn 'Tailscale belum terbaca. Pasang manual dari https://tailscale.com/download' }
+    }
+    Info 'Buka Tailscale dari Start Menu, masuk, lalu terima undangan dari pemilik Server AI.'
+} else { Step 3 $TOTAL 'Ollama (mesin AI lokal)' }
+$ollama = if ($Shared) { $null } else { Find-Ollama }
+if ($Shared) { }
+elseif ($ollama) { Ok 'Sudah terpasang' }
 else {
     Info 'Belum ada. Memasang Ollama...'
     if (Has-Winget) {
@@ -143,12 +181,14 @@ else {
 
 # 4. Nyalakan Ollama --------------------------------------------------------
 Step 4 $TOTAL 'Menyalakan Ollama'
-if (-not (Ollama-Up)) {
+if ($Shared) { Ok 'Dilewati: AI berjalan di Server AI bersama' }
+elseif (-not (Ollama-Up)) {
     $app = "$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe"
     if (Test-Path $app) { Start-Process -FilePath $app | Out-Null } else { Start-Process -FilePath $ollama -ArgumentList 'serve' -WindowStyle Hidden | Out-Null }
     for ($i = 0; $i -lt 60 -and -not (Ollama-Up); $i++) { Start-Sleep -Seconds 1 }
 }
-if (Ollama-Up) { Ok 'Ollama menyala' } else { Fail 'Ollama tidak mau menyala. Buka aplikasi Ollama dari Start Menu, lalu jalankan Pasang_Tera.bat lagi.' }
+if ($Shared) { }
+elseif (Ollama-Up) { Ok 'Ollama menyala' } else { Fail 'Ollama tidak mau menyala. Buka aplikasi Ollama dari Start Menu, lalu jalankan Pasang_Tera.bat lagi.' }
 
 # 5. Komponen Python (.venv) ------------------------------------------------
 Step 5 $TOTAL 'Komponen TERA (folder .venv)'
@@ -165,9 +205,15 @@ if ($LASTEXITCODE -ne 0) { Fail 'Gagal memasang komponen. Cek internet, hapus fo
 Ok 'Komponen siap'
 
 # 6. Model AI ---------------------------------------------------------------
-Step 6 $TOTAL 'Model AI (diambil dari configs\ai.json)'
+Step 6 $TOTAL 'Model AI dan model kemiripan makna (diambil dari configs\ai.json)'
+if ($Shared) {
+    Ok 'Dilewati: model AI ada di Server AI bersama'
+    $src = Join-Path $Root 'configs\sumber_ai.json'
+    if (-not (Test-Path $src)) { Set-Content -Path $src -Value '{"mode": "server"}' -Encoding ASCII }
+    $models = @()
+} else {
 $cfg = Get-Content (Join-Path $Root 'configs\ai.json') -Raw | ConvertFrom-Json
-$models = @($cfg.v2.generation_model, $cfg.v2.judge_model, $cfg.v2.auto_model, $cfg.ollama.generation_model, $cfg.ollama.judge_model) |
+$models = @($cfg.v2.generation_model, $cfg.v2.judge_model, $cfg.v2.auto_model, $cfg.ollama.generation_model, $cfg.ollama.judge_model, $cfg.ollama.embedding_model) |
     Where-Object { $_ } | Select-Object -Unique
 $installed = (& $ollama list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] })
 foreach ($m in $models) {
@@ -177,6 +223,7 @@ foreach ($m in $models) {
     & $ollama pull $m
     if ($LASTEXITCODE -ne 0) { Fail "Gagal mengunduh model $m. Jalankan Pasang_Tera.bat lagi; unduhan akan dilanjutkan." }
     Ok "$m terpasang"
+}
 }
 
 # 7. Bahasa OCR (untuk Desain Konversi ke PRD) ------------------------------
@@ -217,6 +264,10 @@ try {
 Write-Host ''
 Write-Host '=============================================================='
 Write-Host '  SELESAI. TERA siap dipakai.' -ForegroundColor Green
+if ($Shared) {
+    Write-Host '  Saat TERA terbuka: menu Pengaturan > Sumber AI > Server AI bersama,'
+    Write-Host '  isi alamat server, nama pengguna, dan password dari pemilik server.'
+}
 Write-Host '  Berikutnya cukup klik dua kali "TERA" di Desktop'
 Write-Host '  (atau Jalankan_Tera.bat di folder ini).'
 Write-Host '=============================================================='

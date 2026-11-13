@@ -41,3 +41,9 @@ desktop.ini
 
 # --- Catatan pemasang sekali klik ---
 pasang_tera.log
+
+# --- Server AI bersama: akun, sesi login, dan catatan pemakaian (rahasia) ---
+data/server_ai/
+# --- Token login ke Server AI bersama di laptop ini (rahasia) ---
+configs/sumber_ai.json
+configs/sumber_ai.tmp

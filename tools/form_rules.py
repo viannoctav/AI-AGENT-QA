@@ -131,3 +131,130 @@ def duplicate_names(names: List[str]) -> List[int]:
             dup.append(i)
         seen.add(k)
     return dup
+
+
+# ----------------------------------------------------------------------------- Server AI bersama
+USERNAME_MIN, USERNAME_MAX = 3, 32
+PASSWORD_MIN, PASSWORD_MAX = 8, 128
+_USERNAME = re.compile(r"^[a-z][a-z0-9._-]*$")
+
+
+def username_error(value) -> str:
+    v = str(value or "")
+    if not v.strip():
+        return "Nama pengguna wajib diisi."
+    if v != v.strip() or " " in v:
+        return "Nama pengguna tidak boleh memakai spasi."
+    if len(v) < USERNAME_MIN or len(v) > USERNAME_MAX:
+        return f"Nama pengguna harus {USERNAME_MIN}–{USERNAME_MAX} karakter."
+    if v != v.lower():
+        return "Nama pengguna memakai huruf kecil semua."
+    if not _USERNAME.match(v):
+        return "Nama pengguna diawali huruf, lalu hanya huruf kecil, angka, titik, garis bawah, atau tanda minus."
+    return ""
+
+
+def password_error(value, username: str = "") -> str:
+    v = str(value or "")
+    if not v:
+        return "Password wajib diisi."
+    if len(v) < PASSWORD_MIN:
+        return f"Password minimal {PASSWORD_MIN} karakter."
+    if len(v) > PASSWORD_MAX:
+        return f"Password maksimal {PASSWORD_MAX} karakter."
+    if v != v.strip():
+        return "Password tidak boleh diawali atau diakhiri spasi."
+    if not re.search(r"[A-Za-z]", v) or not re.search(r"\d", v):
+        return "Password harus berisi huruf dan angka."
+    if username and username.lower() in v.lower():
+        return "Password tidak boleh mengandung nama pengguna."
+    if len(set(v.lower())) < 4:
+        return "Password terlalu mudah ditebak."
+    return ""
+
+
+def server_url_error(value) -> str:
+    """Alamat Server AI bersama, mis. http://100.101.102.103:11500 atau http://laptop-anggun:11500."""
+    v = str(value or "").strip()
+    if not v:
+        return "Alamat server wajib diisi."
+    if len(v) > 200:
+        return "Alamat server terlalu panjang."
+    m = re.fullmatch(r"(https?)://([A-Za-z0-9.-]+)(?::(\d{1,5}))?/?", v)
+    if not m:
+        return "Format alamat server salah. Contoh: http://100.101.102.103:11500"
+    host, port = m.group(2), m.group(3)
+    if host.startswith(("-", ".")) or host.endswith(("-", ".")) or ".." in host:
+        return "Nama komputer di alamat server tidak valid."
+    if port and not (1 <= int(port) <= 65535):
+        return "Nomor port harus di antara 1 dan 65535."
+    if re.fullmatch(r"[\d.]+", host):
+        parts = host.split(".")
+        if len(parts) != 4 or any(not p or int(p) > 255 for p in parts):
+            return "Alamat IP tidak valid."
+    return ""
+
+
+def version_error(value, maximum: str = "") -> str:
+    """Versi minimal TƎRᗩ (halaman admin Server AI): kosong = tidak dibatasi."""
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}", v):
+        return "Format versi tiga angka dipisah titik, misalnya 1.1.0."
+    if maximum and tuple(map(int, v.split("."))) > tuple(map(int, maximum.split("."))):
+        return f"Versi minimal tidak boleh lebih baru dari versi server ini ({maximum})."
+    return ""
+
+
+MD_EXT = ("md", "markdown")
+MD_MAX_BYTES = 2_000_000
+
+
+def md_file_error(name, content) -> str:
+    """File Markdown untuk MD Konversi ke PDF."""
+    n = str(name or "").strip()
+    if not n:
+        return "Nama file wajib ada."
+    ext = n.rsplit(".", 1)[-1].lower() if "." in n else ""
+    if ext not in MD_EXT:
+        return f"{n}: format harus .md."
+    if not isinstance(content, str) or not content.strip():
+        return f"{n}: file kosong."
+    if len(content.encode("utf-8")) > MD_MAX_BYTES:
+        return f"{n}: ukuran file maksimal 2 MB."
+    if "\x00" in content or "�" in content[:2000]:
+        return f"{n}: bukan file teks Markdown yang bisa dibaca."
+    if _alnum(content) < 3:
+        return f"{n}: tidak berisi teks yang bisa dijadikan PDF."
+    return ""
+
+
+# ----------------------------------------------------------------------------- Bandingkan test case
+COMPARE_EXT = ("xlsx", "json")
+COMPARE_MAX_BYTES = 20 * 1024 * 1024
+LABEL_MIN, LABEL_MAX = 1, 30
+
+
+def compare_file_error(name: str, n_bytes: int) -> str:
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in COMPARE_EXT:
+        return f"{name}: format harus Excel (.xlsx) atau JSON (.json)."
+    if n_bytes <= 0:
+        return f"{name}: file kosong."
+    if n_bytes > COMPARE_MAX_BYTES:
+        return f"{name}: ukuran file maksimal 20 MB."
+    return ""
+
+
+def label_error(value, side: str) -> str:
+    v = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not v:
+        return f"Nama kumpulan {side} wajib diisi."
+    if len(v) > LABEL_MAX:
+        return f"Nama kumpulan {side} maksimal {LABEL_MAX} karakter."
+    if any(c in FORBIDDEN or ord(c) < 32 for c in v):
+        return f"Nama kumpulan {side} tidak boleh memakai karakter {' '.join(FORBIDDEN)}"
+    if not any(c.isalnum() for c in v):
+        return f"Nama kumpulan {side} harus mengandung huruf atau angka."
+    return ""

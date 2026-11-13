@@ -3,7 +3,6 @@ import json
 import re
 from pathlib import Path
 
-from ollama import Client
 
 from tools.ai_config import ollama_settings
 
@@ -871,7 +870,8 @@ def parse_requirements(
     if not inventory:
         raise RuntimeError("Tidak ditemukan requirement ID (FR/NFR/BR) pada PRD.")
 
-    client = Client(host=settings["host"])
+    from tools import ai_source  # AI di laptop ini atau Server AI bersama
+    client = ai_source.client()
 
     batches = _build_batches(
         inventory,
@@ -938,4 +938,4 @@ def parse_requirements(
     except Exception as exc:
         print(f"⚠️ Gagal menyimpan cache requirements: {exc}")
 
-    return result
+    return result

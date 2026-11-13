@@ -39,12 +39,18 @@ if errorlevel 1 (
   ".venv\Scripts\python.exe" -m pip install pillow
 )
 
-where ollama >nul 2>nul
-if errorlevel 1 (
-  echo.
-  echo [!] Ollama belum terpasang. Klik dua kali Pasang_Tera.bat untuk memasangnya otomatis.
-  echo     Tera tetap dibuka, tapi AI belum bisa dipakai sampai Ollama terpasang.
-  echo.
+rem Yang memakai Server AI bersama tidak butuh Ollama di laptopnya
+set "PAKAI_SERVER="
+if exist "configs\sumber_ai.json" findstr /c:"\"mode\": \"server\"" "configs\sumber_ai.json" >nul 2>nul && set "PAKAI_SERVER=1"
+if not defined PAKAI_SERVER (
+  where ollama >nul 2>nul
+  if errorlevel 1 (
+    echo.
+    echo [!] Ollama belum terpasang. Klik dua kali Pasang_Tera.bat untuk memasangnya otomatis.
+    echo     Tera tetap dibuka, tapi AI belum bisa dipakai sampai Ollama terpasang,
+    echo     atau sampai kamu masuk ke Server AI bersama di menu Pengaturan.
+    echo.
+  )
 )
 
 echo.

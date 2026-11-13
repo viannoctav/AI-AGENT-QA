@@ -75,16 +75,11 @@ def judge_model() -> str:
 def _get_chat():
     if CHAT_FN is not None:
         return CHAT_FN
-    from ollama import Client  # import lambat agar modul bisa dites tanpa ollama
     # batas waktu per panggilan: AI yang macet (atau koneksi putus) tidak menahan proses berjam-jam,
     # panggilan dicoba ulang. Panggilan normal di laptop CPU 1-5 menit.
     timeout = float(settings().get("call_timeout_sec") or 900)
-    host = ollama_settings().get("base_url") or ollama_settings().get("host") or None
-    try:
-        return Client(host=host, timeout=timeout).chat
-    except Exception:
-        from ollama import chat
-        return chat
+    from tools import ai_source  # AI di laptop ini atau Server AI bersama (dengan token login)
+    return ai_source.client(timeout).chat
 
 
 def _content(resp: Any) -> str:
@@ -141,9 +136,12 @@ def chat_json(model: str, system: str, prompt: str, *, temperature: Optional[flo
                 else:
                     raise
         except Exception as e:  # koneksi/model gagal -> coba lagi
+            from tools import ai_source
+            if ai_source.is_auth_error(e):  # login ke Server AI habis/ditolak: mengulang tidak akan berhasil
+                raise ai_source.AccessError(ai_source.auth_message(e)) from e
             ui.event("llm", f"chat error: {e}", "red")
             continue
         data = parse_json_loose(_content(resp))
         if data is not None:
             return data
-    return None
+    return None

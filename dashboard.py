@@ -26,12 +26,14 @@ import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from tools import form_rules as FR  # noqa: E402  aturan validasi isian (sama dengan dashboard/app.js)
+from tools import ai_source  # noqa: E402  AI di laptop ini atau Server AI bersama
+from tools import version as VER  # noqa: E402  nomor versi TƎRᗩ dan catatan perubahan
 
 STATIC = ROOT / "dashboard"
 RUNS = ROOT / "runs"
@@ -102,20 +104,30 @@ def settings():
 
 # ----------------------------------------------------------------------------- ollama
 def ollama_models():
-    """Daftar model yang terpasang: [{name, size}] atau None bila Ollama mati."""
-    try:
-        import ollama
-        resp = ollama.list()
-        items = resp["models"] if isinstance(resp, dict) else getattr(resp, "models", [])
-        out = []
-        for m in items:
-            get = (lambda k: m.get(k)) if isinstance(m, dict) else (lambda k: getattr(m, k, None))
-            name = get("model") or get("name")
-            if name:
-                out.append({"name": name, "size": get("size") or 0})
-        return out
-    except Exception:
-        return None
+    """Daftar model yang terpasang: [{name, size}] atau None bila AI tidak bisa dihubungi."""
+    return ai_source.probe()[0]
+
+
+def ai_problem_text(problem):
+    if ai_source.is_server():
+        return {"login": "Belum masuk ke Server AI bersama atau sesi login habis. Masuk lagi di Pengaturan > Sumber AI.",
+                "ditolak": "Server AI bersama menolak laptop ini. Pastikan Tailscale menyala dan sudah masuk.",
+                "versi": "Versi TƎRᗩ di laptop ini terlalu lama untuk Server AI bersama. Minta folder TƎRᗩ terbaru ke pemilik server."}.get(
+            problem, "Server AI bersama tidak bisa dihubungi. Pastikan Tailscale menyala dan Server AI temanmu berjalan.")
+    return "Mesin AI lokal belum menyala. Buka aplikasi Ollama, lalu coba lagi."
+
+
+def require_ai():
+    models, problem = ai_source.probe()
+    if models is None:
+        raise ApiError(409 if problem else 503, ai_problem_text(problem))
+    return models
+
+
+def ai_state():
+    """(model, info sumber AI) dalam satu pemeriksaan."""
+    models, problem = ai_source.probe()
+    return models, {**ai_source.status(), "problem": problem}
 
 
 def needed_models(cfg):
@@ -142,12 +154,13 @@ def preflight():
     cfg["generation_model"] = llm.generation_model()
     cfg["judge_model"] = llm.judge_model()
     cfg["auto_model"] = llm.auto_model()
-    models = ollama_models()
+    models, source = ai_state()
     have = model_names(models)
     need = needed_models(cfg)
     prds = list_prds()
     return {
         "ollama": models is not None,
+        "source": source,
         "models": [{"role": r, "name": n, "ok": n in have} for r, n in need.items()],
         "missing": sorted({n for n in need.values() if n not in have}),
         "prd_count": len(prds),
@@ -163,6 +176,22 @@ def list_prds():
     for p in sorted(PRD_DIR.glob("*.md")):
         out.append({"file": p.name, "title": prd_title(p), "size": p.stat().st_size})
     return out
+
+
+def delete_prd(name):
+    """Hapus file PRD dari knowledge/prd. Hasil test case dan salinan PRD di folder hasil konversi tidak ikut terhapus."""
+    f = PRD_DIR / Path(name).name
+    if not f.is_file() or f.suffix.lower() != ".md":
+        raise ApiError(404, "Dokumen PRD tidak ditemukan (mungkin sudah dihapus dari folder).")
+    if ACTIVE["id"]:
+        info = read_json(RUNS / ACTIVE["id"] / "run.json") or {}
+        if info.get("prd") == f.name:
+            raise ApiError(409, "Dokumen ini sedang dipakai proses yang berjalan.")
+    f.unlink()
+    note = ""
+    if _NOTES_FILE.match(f.name):
+        note = "Salinannya masih ada di Riwayat (hasil konversi) dan bisa diunduh lagi."
+    return {"ok": True, "note": note}
 
 
 def upload_prd(body):
@@ -530,6 +559,8 @@ def _worker(run_id, prd_file, overrides):
 
 
 def start_run(body):
+    if COMPARE["status"] == "berjalan":
+        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
     if NOTES["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD dari catatan masih berjalan. Tunggu sampai selesai.")
     if DESIGN["status"] == "berjalan":
@@ -549,9 +580,7 @@ def start_run(body):
             raise ApiError(400, "Jumlah skenario minimal 1")
     else:
         cap = None
-    models = ollama_models()
-    if models is None:
-        raise ApiError(409, "Mesin AI lokal belum menyala. Buka aplikasi Ollama, lalu coba lagi.")
+    models = require_ai()
     from tools import llm
     cfg = settings()
     cfg.update(generation_model=llm.generation_model(), judge_model=llm.judge_model(), auto_model=llm.auto_model())
@@ -559,6 +588,9 @@ def start_run(body):
         cfg["judge_enabled"] = False
     missing = sorted({n for n in needed_models(cfg).values() if n not in model_names(models)})
     if missing:
+        if ai_source.is_server():
+            raise ApiError(409, "Model AI belum ada di Server AI bersama: " + ", ".join(missing)
+                           + ". Minta pemilik server mengunduhnya, atau pilih model lain di Pengaturan.")
         raise ApiError(409, "Model AI belum terpasang: " + ", ".join(missing) + ". Unduh dengan: ollama pull <nama>")
     with LOCK:
         if ACTIVE["id"]:
@@ -651,8 +683,8 @@ def models_info():
                        ("Kasus rumit", "auto_model")):
         if cfg.get(key):
             use.setdefault(cfg[key], []).append(label)
-    models = ollama_models()
-    return {"ollama": models is not None,
+    models, source = ai_state()
+    return {"ollama": models is not None, "source": source,
             "models": [{**m, "use": use.get(m["name"]) or use.get(m["name"].replace(":latest", "")) or []}
                        for m in (models or [])]}
 
@@ -718,8 +750,9 @@ def start_notes(body):
         raise ApiError(409, "Penyusunan PRD sebelumnya masih berjalan.")
     if DESIGN["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD dari desain masih berjalan. Tunggu sampai selesai.")
-    if ollama_models() is None:
-        raise ApiError(503, "AI lokal (Ollama) belum menyala.")
+    if COMPARE["status"] == "berjalan":
+        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
+    require_ai()
     NOTES.update({"status": "berjalan", "log": [], "result": None, "error": None,
                   "started": time.time(), "finished": None, "name": name})
     def go():
@@ -954,8 +987,9 @@ def start_design(body):
         raise ApiError(409, "Masih ada proses pembuatan test case yang berjalan. Tunggu sampai selesai.")
     if NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan":
         raise ApiError(409, "Masih ada penyusunan PRD yang berjalan. Tunggu sampai selesai.")
-    if ollama_models() is None:
-        raise ApiError(503, "AI lokal (Ollama) belum menyala.")
+    if COMPARE["status"] == "berjalan":
+        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
+    require_ai()
     DESIGN.update({"status": "berjalan", "log": [], "result": None, "error": None, "progress": {},
                    "started": time.time(), "finished": None, "name": name})
 
@@ -992,6 +1026,259 @@ def save_prd(name, body):
     return {"file": f.name, "title": prd_title(f)}
 
 
+# ----------------------------------------------------------------------------- Bandingkan test case
+COMPARE = {"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None,
+           "progress": {}, "name": None, "mode": None}
+COMPARE_DIR = ROOT / "outputs" / "tc_compare"
+COMPARE_UPLOADS = {}  # token -> {name, tcs, mapping, missing, time}; hanya di memori, tidak disimpan
+
+
+def compare_sources():
+    """Hasil run yang selesai (bisa dipilih sebagai A atau B)."""
+    out = []
+    for r in list_runs():
+        if r.get("status") != "selesai" or not (RUNS / r["id"] / "artifacts.json").exists() and not (RUNS / r["id"] / "test_cases.xlsx").exists():
+            continue
+        out.append({"id": r["id"], "title": r.get("prd_title") or r.get("prd"), "prd": r.get("prd"),
+                    "finished": r.get("finished"), "test_cases": (r.get("report") or {}).get("test_cases")})
+    return out
+
+
+def compare_info():
+    models = ai_source.probe()[0]
+    from tools import embed
+    return {**COMPARE, "now": time.time(), "ai": models is not None,
+            "embed": embed.available(models), "embed_model": embed.model_name()}
+
+
+def compare_upload(body):
+    import base64
+    import secrets
+    from tc_compare.loader import LoadError, LABELS, load_upload, missing_fields
+    name = Path(str(body.get("name") or "")).name[:120]
+    field = "cmp-file-" + ("b" if body.get("side") == "b" else "a")
+    data = str(body.get("data") or "")
+    data = data.split(",", 1)[1] if data.startswith("data:") else data
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except Exception:
+        raise ApiError(400, f"{name}: file tidak terbaca.", field)
+    err = FR.compare_file_error(name or "file", len(raw))
+    if err:
+        raise ApiError(400, err, field)
+    try:
+        tcs, mapping = load_upload(name, raw)
+    except LoadError as e:
+        raise ApiError(400, str(e), field)
+    while len(COMPARE_UPLOADS) >= 10:  # simpan maksimal 10 unggahan terakhir di memori
+        COMPARE_UPLOADS.pop(min(COMPARE_UPLOADS, key=lambda k: COMPARE_UPLOADS[k]["time"]))
+    token = secrets.token_hex(12)
+    COMPARE_UPLOADS[token] = {"name": name, "tcs": tcs, "missing": missing_fields(tcs), "time": time.time()}
+    cols = [f"{LABELS[f]} = {c}" for f, c in mapping.items() if not f.startswith("_") and f in LABELS]
+    return {"token": token, "name": name, "count": len(tcs), "columns": cols, "sheet": mapping.get("_sheet"),
+            "missing": COMPARE_UPLOADS[token]["missing"]}
+
+
+def _compare_side(spec, side):
+    from tc_compare.loader import LoadError, load_run, missing_fields
+    S_ = side.upper()
+    if not isinstance(spec, dict):
+        raise ApiError(400, f"Pilih sumber test case {S_}.", f"cmp-src-{side}")
+    label = re.sub(r"\s+", " ", str(spec.get("label") or "")).strip()
+    err = FR.label_error(label, S_)
+    if err:
+        raise ApiError(400, err, f"cmp-label-{side}")
+    if spec.get("kind") == "run":
+        rid = str(spec.get("id") or "")
+        if not rid:
+            raise ApiError(400, f"Pilih hasil run untuk {S_}.", f"cmp-run-{side}")
+        d = run_dir(rid)
+        info = read_json(d / "run.json") or {}
+        if info.get("status") != "selesai":
+            raise ApiError(400, f"Hasil run {S_} belum selesai.", f"cmp-run-{side}")
+        try:
+            tcs = load_run(d)
+        except LoadError as e:
+            raise ApiError(400, str(e), f"cmp-run-{side}")
+        return {"label": label, "tcs": tcs, "key": f"run:{rid}", "missing": missing_fields(tcs),
+                "source": f"Riwayat: {info.get('prd_title') or info.get('prd')} ({fmt_time(info.get('finished'))})"}
+    if spec.get("kind") == "file":
+        up = COMPARE_UPLOADS.get(str(spec.get("token") or ""))
+        if not up:
+            raise ApiError(400, f"Unggah file test case untuk {S_} (atau unggah ulang bila TƎRᗩ sempat ditutup).", f"cmp-file-{side}")
+        return {"label": label, "tcs": [dict(t) for t in up["tcs"]], "key": f"file:{spec.get('token')}",
+                "missing": up["missing"], "source": f"File: {up['name']}"}
+    raise ApiError(400, f"Pilih sumber test case {S_}: dari Riwayat atau unggah file.", f"cmp-src-{side}")
+
+
+def fmt_time(t):
+    try:
+        return time.strftime("%d-%m-%Y %H:%M", time.localtime(float(t)))
+    except Exception:
+        return "-"
+
+
+def _compare_worker(a, b, mode, name, use_embed):
+    from tc_compare.pipeline import run as compare_run
+    try:
+        llm_mod = None
+        if mode == "lengkap":
+            from tools import llm as llm_mod
+        embed_fn = None
+        if use_embed:
+            from tools import embed
+            embed_fn = embed.make()
+        res = compare_run(a, b, mode=mode, name=name, llm=llm_mod, embed_fn=embed_fn, progress=COMPARE["progress"],
+                          cb=lambda m: COMPARE["log"].append({"time": time.time(), "msg": m}))
+        COMPARE["result"] = res
+        COMPARE["status"] = "selesai"
+    except Exception as e:
+        traceback.print_exc()
+        COMPARE["error"] = str(e)
+        COMPARE["status"] = "gagal"
+    finally:
+        COMPARE["finished"] = time.time()
+        keep_awake(False)
+
+
+def start_compare(body):
+    if _busy():
+        raise ApiError(409, "Masih ada proses lain yang berjalan. Bandingkan test case setelah proses itu selesai.")
+    raw_name = str(body.get("name") or "").strip()
+    if raw_name:
+        err = FR.name_error(raw_name, "Nama perbandingan")
+        if err:
+            raise ApiError(400, err, "cmp-name")
+    mode = body.get("mode") if body.get("mode") in ("lengkap", "cepat") else None
+    if not mode:
+        raise ApiError(400, "Pilih mode perbandingan.", "cmp-mode")
+    a = _compare_side(body.get("a"), "a")
+    b = _compare_side(body.get("b"), "b")
+    if a["key"] == b["key"]:
+        raise ApiError(400, "A dan B memakai sumber yang sama. Pilih dua kumpulan test case yang berbeda.", "cmp-src-b")
+    if a["label"].lower() == b["label"].lower():
+        raise ApiError(400, "Nama kumpulan A dan B harus berbeda.", "cmp-label-b")
+    models, problem = ai_source.probe()
+    from tools import embed
+    use_embed = models is not None and embed.available(models)
+    if mode == "lengkap" and models is None:
+        raise ApiError(409, ai_problem_text(problem) + " Atau pilih Mode cepat.", "cmp-mode")
+    name = re.sub(r"\s+", " ", raw_name) or f"{a['label']} vs {b['label']}"
+    with LOCK:
+        if _busy():
+            raise ApiError(409, "Masih ada proses lain yang berjalan.")
+        COMPARE.update({"status": "berjalan", "log": [], "result": None, "error": None, "progress": {},
+                        "started": time.time(), "finished": None, "name": name, "mode": mode})
+
+    def go():
+        keep_awake(True)
+        _compare_worker(a, b, mode, name, use_embed)
+    threading.Thread(target=go, daemon=True).start()
+    return {"ok": True}
+
+
+def reset_compare():
+    if COMPARE["status"] == "berjalan":
+        raise ApiError(409, "Perbandingan masih berjalan")
+    COMPARE.update({"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None,
+                    "progress": {}, "name": None, "mode": None})
+    return {"ok": True}
+
+
+def _compare_dir(cid):
+    d = COMPARE_DIR / Path(str(cid or "")).name
+    if not cid or not (d / "analysis_metadata.json").is_file():
+        raise ApiError(404, "Hasil perbandingan tidak ditemukan")
+    return d
+
+
+def list_compares():
+    out = []
+    if COMPARE_DIR.is_dir():
+        for d in COMPARE_DIR.iterdir():
+            meta = read_json(d / "analysis_metadata.json") if d.is_dir() else None
+            if meta:
+                out.append({"id": d.name, "name": meta.get("name"), "time": meta.get("time"), "mode": meta.get("mode"),
+                            "labels": meta.get("labels"), "stats": meta.get("stats"), "xlsx_file": meta.get("xlsx_file")})
+    return sorted(out, key=lambda m: m.get("time") or 0, reverse=True)
+
+
+def read_compare(cid):
+    res = read_json(_compare_dir(cid) / "hasil.json")
+    if not res:
+        raise ApiError(404, "Hasil perbandingan tidak ditemukan")
+    res["id"] = Path(cid).name
+    return res
+
+
+def delete_compare(cid):
+    if COMPARE["status"] == "berjalan":
+        raise ApiError(409, "Perbandingan masih berjalan")
+    d = _compare_dir(cid)
+    shutil.rmtree(d)
+    if (COMPARE.get("result") or {}).get("id") == d.name:
+        reset_compare()
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------- MD Konversi ke PDF
+def md_to_pdf(body):
+    """Markdown -> PDF saat itu juga (tanpa AI, tidak disimpan). Dikembalikan langsung untuk diunduh."""
+    name, content = str(body.get("name") or ""), body.get("content")
+    err = FR.md_file_error(name, content)
+    if err:
+        raise ApiError(400, err, "md-files")
+    from tools.md_pdf import markdown_to_pdf, pdf_name
+    try:
+        return markdown_to_pdf(content), pdf_name(Path(name).name)
+    except Exception as e:
+        raise ApiError(500, f"{name}: gagal dijadikan PDF ({e}).")
+
+
+# ----------------------------------------------------------------------------- sumber AI
+def _busy():
+    return bool(ACTIVE["id"]) or NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan" \
+        or COMPARE["status"] == "berjalan"
+
+
+def source_info():
+    models, problem = ai_source.probe()
+    return {**ai_source.status(), "problem": problem, "ok": models is not None}
+
+
+def source_login(body):
+    if _busy():
+        raise ApiError(409, "Sumber AI tidak bisa diganti selama ada proses yang berjalan.")
+    url, user, pw = str(body.get("url") or "").strip(), str(body.get("username") or "").strip(), str(body.get("password") or "")
+    for field, err in (("sa-url", FR.server_url_error(url)), ("sa-user", FR.username_error(user)),
+                       ("sa-pass", "" if pw else "Password wajib diisi.")):
+        if err:
+            raise ApiError(400, err, field)
+    if len(pw) > FR.PASSWORD_MAX:
+        raise ApiError(400, f"Password maksimal {FR.PASSWORD_MAX} karakter.", "sa-pass")
+    try:
+        ai_source.login(url, user, pw)
+    except ConnectionError as e:
+        raise ApiError(502, str(e), "sa-url")
+    except PermissionError as e:
+        raise ApiError(401, str(e), "sa-pass")
+    return source_info()
+
+
+def source_logout():
+    if _busy():
+        raise ApiError(409, "Tidak bisa keluar selama ada proses yang berjalan.")
+    ai_source.logout()
+    return source_info()
+
+
+def source_local():
+    if _busy():
+        raise ApiError(409, "Sumber AI tidak bisa diganti selama ada proses yang berjalan.")
+    ai_source.use_local()
+    return source_info()
+
+
 ROUTES = []
 
 
@@ -1025,7 +1312,21 @@ route("GET", "/api/design")(lambda h, q: {**DESIGN, "now": time.time()})
 route("POST", "/api/design")(lambda h, q: start_design(h.json_body()))
 route("POST", "/api/design/reset")(lambda h, q: reset_design())
 route("POST", "/api/design/images")(lambda h, q: upload_design_image(h.json_body(limit=60_000_000)))
+route("GET", "/api/compare")(lambda h, q: compare_info())
+route("POST", "/api/compare")(lambda h, q: start_compare(h.json_body()))
+route("POST", "/api/compare/reset")(lambda h, q: reset_compare())
+route("POST", "/api/compare/upload")(lambda h, q: compare_upload(h.json_body(limit=30_000_000)))
+route("GET", "/api/compare/sources")(lambda h, q: compare_sources())
+route("GET", "/api/compares")(lambda h, q: list_compares())
+route("GET", "/api/compares/(?P<cid>[^/]+)")(lambda h, q, cid: read_compare(unquote(cid)))
+route("DELETE", "/api/compares/(?P<cid>[^/]+)")(lambda h, q, cid: delete_compare(unquote(cid)))
+route("GET", "/api/about")(lambda h, q: {"version": VER.current(), "changelog": VER.changelog(), "source": ai_source.status()})
+route("GET", "/api/ai-source")(lambda h, q: source_info())
+route("POST", "/api/ai-source/login")(lambda h, q: source_login(h.json_body()))
+route("POST", "/api/ai-source/logout")(lambda h, q: source_logout())
+route("POST", "/api/ai-source/local")(lambda h, q: source_local())
 route("GET", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: read_prd(unquote(name)))
+route("DELETE", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: delete_prd(unquote(name)))
 route("PUT", "/api/prds/(?P<name>[^/]+)")(lambda h, q, name: save_prd(unquote(name), h.json_body()))
 
 
@@ -1053,6 +1354,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(raw)
+
+    def send_pdf(self, data, name):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        plain = name.encode("ascii", "replace").decode().replace("?", "_").replace('"', "")
+        self.send_header("Content-Disposition", f"attachment; filename=\"{plain}\"; filename*=UTF-8''{quote(name)}")
+        self.end_headers()
+        self.wfile.write(data)
 
     def send_file(self, path, download_name=None):
         ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
@@ -1086,6 +1397,16 @@ class Handler(BaseHTTPRequestHandler):
                 info = read_json(d / "run.json", {})
                 stem = Path(info.get("prd", "hasil")).stem
                 return self.send_file(f, f"{stem}_{m.group(2)}")
+            m = re.fullmatch(r"/api/compares/([^/]+)/xlsx", path)
+            if method == "GET" and m:
+                d = _compare_dir(unquote(m.group(1)))
+                meta = read_json(d / "analysis_metadata.json") or {}
+                f = d / Path(meta.get("xlsx_file") or "").name
+                if not f.is_file():
+                    raise ApiError(404, "File Excel tidak ditemukan")
+                return self.send_file(f, f.name)
+            if method == "POST" and path == "/api/md-pdf":
+                return self.send_pdf(*md_to_pdf(self.json_body()))
             m = re.fullmatch(r"/api/conversions/([^/]+)/(review|prd)", path)
             if method == "GET" and m:
                 f = conversion_file(unquote(m.group(1)), m.group(2))
@@ -1217,7 +1538,7 @@ def main():
     server = QuietServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}"
     try:
-        print(f"TƎRᗩ berjalan di {url}")
+        print(f"TƎRᗩ versi {VER.current()} berjalan di {url}")
     except UnicodeEncodeError:  # jendela lama yang tidak mendukung huruf khusus
         print(f"TERA berjalan di {url}")
     print("Biarkan jendela ini terbuka selama dashboard dipakai. Tekan Ctrl+C untuk menutup.")

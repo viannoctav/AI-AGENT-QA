@@ -41,7 +41,7 @@
     "judge_enabled": true,
     "num_predict": 3000,
     "temperature": 0.2,
-    "max_obligations": 250,
+    "max_obligations": 3000,
     "max_attempts": 3,
     "judge_batch": 5,
     "dedup": true,
@@ -53,6 +53,14 @@
     "generation_model": "gemma4:e4b",
     "judge_model": "qwen2.5:7b",
     "auto_model": "",
-    "judge_timing": "akhir"
+    "judge_timing": "akhir",
+    "auto_model_kinds": [
+      "decision",
+      "edge",
+      "whitespace"
+    ],
+    "batch_size": 20,
+    "num_ctx": 8192,
+    "think": false
   }
 }

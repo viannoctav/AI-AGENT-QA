@@ -62,18 +62,24 @@ def pick_prd(arg):
 
 
 def _ollama_up() -> bool:
-    try:
-        import ollama
-        ollama.list()
-        return True
-    except Exception:
-        return False
+    from tools import ai_source
+    return ai_source.probe()[0] is not None
 
 
 def ensure_ollama() -> None:
-    """Jika server Ollama belum hidup, nyalakan otomatis (tanpa jendela) dan matikan lagi saat run selesai."""
-    if _ollama_up():
+    """Jika server Ollama belum hidup, nyalakan otomatis (tanpa jendela) dan matikan lagi saat run selesai.
+    Bila memakai Server AI bersama, tidak ada yang dinyalakan di laptop ini."""
+    from tools import ai_source
+    models, problem = ai_source.probe()
+    if models is not None:
         return
+    if ai_source.is_server():
+        msg = {"login": "Belum masuk atau sesi login habis. Masuk lagi di dashboard: Pengaturan > Sumber AI.",
+               "ditolak": "Server menolak laptop ini. Pastikan tersambung lewat Tailscale.",
+               "versi": "Versi TƎRᗩ ini terlalu lama untuk Server AI bersama. Minta folder TƎRᗩ terbaru ke pemilik server."}.get(
+            problem, "Server AI bersama tidak bisa dihubungi. Pastikan Tailscale menyala dan Server AI temanmu berjalan.")
+        print(f"\n[!] {msg}")
+        sys.exit(2)
     exe = shutil.which("ollama")
     if not exe:
         print("\n[!] Perintah `ollama` tidak ditemukan. Pasang Ollama dari https://ollama.com/download lalu coba lagi.")
@@ -105,19 +111,14 @@ def preflight():
         needed.add(llm.auto_model())
     if llm.settings()["judge_enabled"]:
         needed.add(llm.judge_model())
-    try:
-        import ollama
-        resp = ollama.list()
-        items = resp["models"] if isinstance(resp, dict) else getattr(resp, "models", [])
-        have = set()
-        for m in items:
-            name = (m.get("model") or m.get("name")) if isinstance(m, dict) else (getattr(m, "model", None) or getattr(m, "name", ""))
-            if name:
-                have.add(name)
-                have.add(name.split(":")[0] if name.endswith(":latest") else name)
-    except Exception as e:
+    from tools import ai_source
+    models, problem = ai_source.probe()
+    have = set()
+    for m in models or []:
+        have.add(m["name"])
+        have.add(m["name"].split(":")[0] if m["name"].endswith(":latest") else m["name"])
+    if models is None:
         print("\n[!] Tidak bisa terhubung ke Ollama (127.0.0.1:11434).")
-        print(f"    Detail: {str(e)[:160]}")
         print("    1) Pastikan `ollama serve` berjalan di jendela PowerShell LAIN dan tidak ditutup.")
         print("    2) Cek: curl http://127.0.0.1:11434   (harus menjawab: Ollama is running)")
         print('    3) Bila ada proxy:  $env:NO_PROXY = "127.0.0.1,localhost"')
@@ -125,6 +126,8 @@ def preflight():
     missing = sorted(n for n in needed if n not in have)
     if missing:
         print(f"\n[!] Model belum ter-pull: {', '.join(missing)}")
+        if ai_source.is_server():
+            print("    Minta pemilik Server AI bersama mengunduh model ini, atau pilih model lain di Pengaturan.")
         for n in missing:
             print(f"    ollama pull {n}")
         sys.exit(2)

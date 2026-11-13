@@ -16,40 +16,48 @@
       <h1 id="splash-title" class="sr-only">TƎRᗩ</h1>
       <p class="splash-tag">Asisten QA berbasis AI</p>
       <button type="button" class="btn btn-primary splash-btn" id="splash-enter">Masuk</button>
-      <p class="splash-note">Berjalan di laptop ini. Data tidak dikirim ke internet.</p>
+      <p class="splash-note" id="splash-note">Berjalan di laptop ini. Data tidak dikirim ke internet.</p>
     </div>
   </div>
 <div class="shell">
-  <nav class="nav" aria-label="Navigasi utama">
+  <nav class="nav" id="nav" aria-label="Navigasi utama">
     <div class="brand">
       <img class="brand-mark" src="logo-mark.png" alt="" height="38">
-      <div><img class="brand-word" src="logo-word.png" alt="TƎRᗩ" height="19"><span>Asisten QA berbasis AI</span></div>
+      <div class="brand-text"><img class="brand-word" src="logo-word.png" alt="TƎRᗩ" height="19"><span>Asisten QA berbasis AI</span></div>
     </div>
     <div class="nav-links">
-      <a href="#beranda" data-view="beranda">Beranda</a>
-      <div class="nav-group" role="group" aria-labelledby="ng-konversi">
-        <span class="nav-group-title" id="ng-konversi">Konversi Dokumen</span>
-        <a class="sub" href="#catatan" data-view="catatan"><span>Catatan Konversi ke PRD</span></a>
-        <a class="sub" href="#desain" data-view="desain"><span>Desain Konversi ke PRD</span></a>
+      <a href="#beranda" data-view="beranda" title="Beranda"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg><span class="lbl">Beranda</span></a>
+      <div class="nav-group" data-group="konversi">
+        <button type="button" class="nav-group-btn" data-group-btn="konversi" aria-expanded="true" aria-controls="ng-konversi" title="Konversi Dokumen"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M9 14h6"/><path d="m12.5 11.5 2.5 2.5-2.5 2.5"/></svg><span class="lbl">Konversi Dokumen</span><span class="grp-dot" aria-hidden="true"></span><svg class="chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button>
+        <div class="nav-group-list" id="ng-konversi" role="group" aria-label="Konversi Dokumen"><div class="nav-group-inner">
+          <a class="sub" href="#catatan" data-view="catatan"><span>Catatan Konversi ke PRD</span></a>
+          <a class="sub" href="#desain" data-view="desain"><span>Desain Konversi ke PRD</span></a>
+          <a class="sub" href="#mdpdf" data-view="mdpdf"><span>MD Konversi ke PDF</span></a>
+        </div></div>
       </div>
-      <div class="nav-group" role="group" aria-labelledby="ng-gen">
-        <span class="nav-group-title" id="ng-gen">Generator Test Case PRD</span>
-        <a class="sub" href="#mulai" data-view="mulai">Mulai baru</a>
-        <a class="sub" href="#berjalan" data-view="berjalan">Sedang berjalan<span id="nav-dot" class="nav-dot" hidden aria-label="sedang berjalan"></span></a>
-        <a class="sub" href="#hasil" data-view="hasil">Hasil</a>
-        <a class="sub" href="#cek" data-view="cek">Perlu dicek<span id="nav-badge" class="nav-dot nav-dot-warn" hidden aria-label="ada hasil baru yang perlu dicek" title="Ada hasil baru yang perlu dicek"></span></a>
-        <a class="sub" href="#cakupan" data-view="cakupan">Cakupan</a>
+      <div class="nav-group" data-group="generator">
+        <button type="button" class="nav-group-btn" data-group-btn="generator" aria-expanded="true" aria-controls="ng-gen" title="Generator Test Case PRD"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 9 1.5 1.5L12 8"/><path d="m8 15 1.5 1.5L12 14"/><path d="M14.5 9.5H17"/><path d="M14.5 15.5H17"/></svg><span class="lbl">Generator Test Case PRD</span><span class="grp-dot" aria-hidden="true"></span><svg class="chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6"/></svg></button>
+        <div class="nav-group-list" id="ng-gen" role="group" aria-label="Generator Test Case PRD"><div class="nav-group-inner">
+          <a class="sub" href="#mulai" data-view="mulai">Mulai baru</a>
+          <a class="sub" href="#berjalan" data-view="berjalan">Sedang berjalan<span id="nav-dot" class="nav-dot" hidden aria-label="sedang berjalan"></span></a>
+          <a class="sub" href="#hasil" data-view="hasil">Hasil</a>
+          <a class="sub" href="#cek" data-view="cek">Perlu dicek<span id="nav-badge" class="nav-dot nav-dot-warn" hidden aria-label="ada hasil baru yang perlu dicek" title="Ada hasil baru yang perlu dicek"></span></a>
+          <a class="sub" href="#cakupan" data-view="cakupan">Cakupan</a>
+          <a class="sub" href="#banding" data-view="banding">Bandingkan test case</a>
+        </div></div>
       </div>
-      <a href="#riwayat" data-view="riwayat">Riwayat</a>
+      <a href="#riwayat" data-view="riwayat" title="Riwayat"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Riwayat</span></a>
     </div>
     <div class="nav-links nav-bottom">
-      <a href="#alur" data-view="alur">Alur Kerja</a>
-      <a href="#pengaturan" data-view="pengaturan">Pengaturan</a>
+      <a href="#alur" data-view="alur" title="Alur Kerja"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="7" height="5" rx="1"/><rect x="14" y="15" width="7" height="5" rx="1"/><path d="M6.5 9v4a2 2 0 0 0 2 2H14"/></svg><span class="lbl">Alur Kerja</span></a>
+      <a href="#pengaturan" data-view="pengaturan" title="Pengaturan"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h9"/><path d="M17 6h3"/><path d="M4 12h3"/><path d="M11 12h9"/><path d="M4 18h11"/><path d="M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg><span class="lbl">Pengaturan</span></a>
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-controls="nav" aria-expanded="true" aria-label="Ciutkan menu samping" title="Ciutkan menu samping"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path class="panel-arrow" d="m15.5 10-2 2 2 2"/></svg><span class="lbl">Ciutkan menu</span></button>
     </div>
     <div class="nav-status" aria-live="polite" hidden>
       <strong id="nav-ai"></strong>
       <span id="nav-ai-sub"></span>
     </div>
+    <a class="nav-version" id="nav-version" href="#versi" data-view="versi">Versi</a>
   </nav>
   <main id="app" tabindex="-1">
     <p class="loading">Memuat...</p>

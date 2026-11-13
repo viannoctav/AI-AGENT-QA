@@ -81,6 +81,35 @@ const V = {
     if (!/^#\s+\S/m.test(v)) return 'PRD harus punya judul di baris paling atas, diawali tanda # (mis. "# Nama Modul").';
     return "";
   },
+  md(name, size, text) {
+    if (!/\.(md|markdown)$/i.test(name)) return `${name}: format harus .md.`;
+    if (size > 2000000) return `${name}: ukuran file maksimal 2 MB.`;
+    if (!size || !String(text ?? "").trim()) return `${name}: file kosong.`;
+    if (/\u0000/.test(text) || /\uFFFD/.test(String(text).slice(0, 2000))) return `${name}: bukan file teks Markdown yang bisa dibaca.`;
+    if (V.alnum(text) < 3) return `${name}: tidak berisi teks yang bisa dijadikan PDF.`;
+    return "";
+  },
+  username(value) {
+    const v = String(value ?? "");
+    if (!v.trim()) return "Nama pengguna wajib diisi.";
+    if (v !== v.trim() || v.includes(" ")) return "Nama pengguna tidak boleh memakai spasi.";
+    if (v.length < 3 || v.length > 32) return "Nama pengguna harus 3–32 karakter.";
+    if (v !== v.toLowerCase()) return "Nama pengguna memakai huruf kecil semua.";
+    if (!/^[a-z][a-z0-9._-]*$/.test(v)) return "Nama pengguna diawali huruf, lalu hanya huruf kecil, angka, titik, garis bawah, atau tanda minus.";
+    return "";
+  },
+  serverUrl(value) {
+    const v = String(value ?? "").trim();
+    if (!v) return "Alamat server wajib diisi.";
+    if (v.length > 200) return "Alamat server terlalu panjang.";
+    const m = v.match(/^(https?):\/\/([A-Za-z0-9.-]+)(?::(\d{1,5}))?\/?$/);
+    if (!m) return "Format alamat server salah. Contoh: http://100.101.102.103:11500";
+    const [, , host, port] = m;
+    if (/^[-.]|[-.]$|\.\./.test(host)) return "Nama komputer di alamat server tidak valid.";
+    if (port && (Number(port) < 1 || Number(port) > 65535)) return "Nomor port harus di antara 1 dan 65535.";
+    if (/^[\d.]+$/.test(host)) { const p = host.split("."); if (p.length !== 4 || p.some((x) => !x || Number(x) > 255)) return "Alamat IP tidak valid."; }
+    return "";
+  },
   NUM: { "c-bs": ["Skenario per kelompok", 1, 20, false], "c-ma": ["Batas menulis ulang", 1, 10, false],
     "c-mo": ["Jumlah skenario maksimum", 1, 10000, true], "c-ctx": ["Kapasitas teks per permintaan", 2048, 131072, false] },
   number(id, raw) {
@@ -365,24 +394,133 @@ async function refreshNav() {
   const nr = o.last && o.last.report ? o.last.report.needs_review : 0;
   badge.hidden = !(nr && o.last.id !== seenReview());
   // kotak status hanya muncul bila ada masalah; saat semuanya siap, sidebar bersih
-  if (!pf.ollama) setNavStatus("AI belum aktif", "Buka aplikasi Ollama dulu");
+  setNavVersion(pf.source);
+  if (!pf.ollama) { const [, t, sub] = aiStatus(pf); setNavStatus(t, sub); }
   else if (pf.missing.length) setNavStatus("AI belum lengkap", "Cek menu Pengaturan");
   else setNavStatus(null);
+}
+
+// [ok, judul, keterangan] untuk status AI, sesuai sumber AI (laptop ini / Server AI bersama)
+function aiStatus(pf) {
+  const src = pf.source || { mode: "lokal" };
+  if (src.mode !== "server") {
+    return pf.ollama ? ["ok", "Mesin AI lokal menyala", "Berjalan di laptop ini"]
+      : ["err", "Mesin AI lokal belum menyala", "Buka aplikasi Ollama, lalu klik Periksa ulang"];
+  }
+  if (pf.ollama) return ["ok", "Server AI bersama terhubung", `Masuk sebagai ${src.username}`];
+  if (src.problem === "login") return ["err", src.logged_in ? "Sesi login Server AI habis" : "Belum masuk ke Server AI bersama", src.logged_in ? "Masuk lagi di Pengaturan, bagian Sumber AI. Bila tetap ditolak, hubungi pemilik server" : "Masuk di Pengaturan, bagian Sumber AI"];
+  if (src.problem === "versi") return ["err", "Versi TƎRᗩ terlalu lama untuk Server AI ini", `Server mewajibkan minimal versi ${src.min_version || "terbaru"}. Minta folder TƎRᗩ terbaru ke pemilik server`];
+  if (src.problem === "ditolak") return ["err", "Server AI bersama menolak laptop ini", "Pastikan Tailscale menyala dan sudah masuk"];
+  return ["err", "Server AI bersama tidak terhubung", "Pastikan Tailscale menyala dan Server AI temanmu sedang berjalan"];
+}
+function pullHint(pf, name) { return (pf.source || {}).mode === "server" ? `Minta pemilik server mengunduh ${name}` : `Unduh dengan: ollama pull ${name}`; }
+
+/* ---------- versi aplikasi */
+function setNavVersion(src) {
+  const a = document.getElementById("nav-version");
+  if (!a || !src || !src.version) return;
+  const fresh = src.update_available || src.too_old;
+  a.innerHTML = `<span class="lbl">TƎRᗩ versi</span>${esc(src.version)}${fresh ? `<span class="nav-ver-new">${src.too_old ? "Perlu update" : "Ada versi baru"}</span>` : ""}`;
+  a.title = fresh ? `Server AI bersama memakai versi ${src.server_version}` : "Lihat apa yang baru";
+}
+
+// CHANGELOG.md -> [{version, date, groups: [{title, items}]}]
+function parseChangelog(md) {
+  const rel = [];
+  let cur = null, grp = null;
+  for (const raw of String(md || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    let m;
+    if ((m = line.match(/^##\s+(\d+\.\d+\.\d+)\s*(?:[—–-]\s*(.+))?$/))) { cur = { version: m[1], date: m[2] || "", groups: [] }; grp = null; rel.push(cur); }
+    else if (cur && (m = line.match(/^###\s+(.+)$/))) { grp = { title: m[1], items: [] }; cur.groups.push(grp); }
+    else if (cur && (m = line.match(/^[-*]\s+(.+)$/))) { if (!grp) { grp = { title: "", items: [] }; cur.groups.push(grp); } grp.items.push(m[1]); }
+  }
+  return rel;
+}
+const inlineMd = (t) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+
+async function viewVersi() {
+  const ab = await api("/api/about");
+  const src = ab.source || {};
+  setNavVersion(src);
+  const rel = parseChangelog(ab.changelog);
+  const banner = src.too_old
+    ? `<div class="banner error" role="alert"><span><strong>TƎRᗩ di laptop ini terlalu lama untuk Server AI bersama.</strong> Server mewajibkan minimal versi ${esc(src.min_version)}. Minta folder TƎRᗩ terbaru ke pemilik server, lalu salin menimpa folder lama (folder <code>runs</code>, <code>outputs</code>, dan <code>knowledge</code> milikmu tetap aman).</span></div>`
+    : src.update_available
+      ? `<div class="banner" role="status"><span><strong>Ada versi lebih baru.</strong> Server AI bersama memakai TƎRᗩ versi ${esc(src.server_version)}, laptop ini versi ${esc(src.version)}. Minta folder terbaru ke pemilik server bila ingin fitur barunya.</span></div>`
+      : "";
+  app.innerHTML = `
+  <header class="page-head"><div><h1>Apa yang baru</h1>
+    <p class="muted">TƎRᗩ di laptop ini versi <b class="num">${esc(ab.version)}</b>.${src.mode === "server" && src.server_version ? ` Server AI bersama versi <span class="num">${esc(src.server_version)}</span>.` : ""}</p></div></header>
+  ${banner}
+  ${rel.length ? rel.map((r) => `<section class="card release" aria-labelledby="rel-${esc(r.version)}">
+      <div class="card-head"><h2 id="rel-${esc(r.version)}">Versi ${esc(r.version)}${r.version === ab.version ? ` <span class="chip-now">Versi kamu</span>` : ""}</h2>
+        ${r.date ? `<span class="small muted">${esc(r.date)}</span>` : ""}</div>
+      ${r.groups.map((g) => `${g.title ? `<h3 class="rel-group">${esc(g.title)}</h3>` : ""}<ul class="rel-list">${g.items.map((i) => `<li>${inlineMd(i)}</li>`).join("")}</ul>`).join("")}
+    </section>`).join("") : `<p class="muted">Catatan perubahan belum tersedia.</p>`}`;
 }
 
 function setNavStatus(title, sub) {
   const box = document.querySelector(".nav-status");
   if (!box) return;
   box.hidden = !title;
+  box.title = title ? `${title}. ${sub || ""}` : "";
   document.getElementById("nav-ai").textContent = title || "";
   document.getElementById("nav-ai-sub").textContent = sub || "";
 }
 
 function setActiveNav(view) {
-  document.querySelectorAll(".nav-links a").forEach((a) => {
-    if (a.dataset.view === view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  let current = null;
+  document.querySelectorAll(".nav-links a, .nav-version").forEach((a) => {
+    if (a.dataset.view === view) { a.setAttribute("aria-current", "page"); current = a; } else a.removeAttribute("aria-current");
+  });
+  const grp = current && current.closest(".nav-group");
+  document.querySelectorAll(".nav-group-btn").forEach((b) => b.classList.toggle("has-current", !!grp && b.closest(".nav-group") === grp));
+  if (grp) {
+    const st = navState();
+    if (st.groups[grp.dataset.group] === false) { st.groups[grp.dataset.group] = true; saveNav(); } // menu yang sedang dibuka selalu terlihat
+  }
+  applyNav();
+}
+
+/* ---------- menu samping: diciutkan (hanya ikon) dan grup menu buka/tutup; diingat di browser ini */
+function navState() {
+  if (S.nav) return S.nav;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("tera-menu") || "{}") || {}; } catch (e) { saved = {}; }
+  // pertama kali: semua grup tertutup supaya menu pendek; grup halaman yang sedang dibuka otomatis terbuka
+  S.nav = { mini: !!saved.mini, groups: saved.groups && typeof saved.groups === "object" ? saved.groups : { konversi: false, generator: false } };
+  return S.nav;
+}
+function saveNav() { try { localStorage.setItem("tera-menu", JSON.stringify(navState())); } catch (e) { /* penyimpanan browser tidak tersedia */ } }
+function applyNav() {
+  const st = navState();
+  const shell = document.querySelector(".shell");
+  if (shell) shell.classList.toggle("nav-mini", st.mini);
+  const t = document.getElementById("nav-toggle");
+  if (t) {
+    const label = st.mini ? "Lebarkan menu samping" : "Ciutkan menu samping";
+    t.setAttribute("aria-expanded", String(!st.mini)); t.setAttribute("aria-label", label); t.title = label;
+    const l = t.querySelector(".lbl"); if (l) l.textContent = st.mini ? "Lebarkan menu" : "Ciutkan menu";
+  }
+  document.querySelectorAll(".nav-group").forEach((g) => {
+    const open = st.groups[g.dataset.group] !== false;
+    g.classList.toggle("closed", !open);
+    const b = g.querySelector(".nav-group-btn"), list = g.querySelector(".nav-group-list");
+    b.setAttribute("aria-expanded", String(open && !st.mini));
+    if (open && !st.mini) list.removeAttribute("inert"); else list.setAttribute("inert", "");
   });
 }
+applyNav();
+document.getElementById("nav-toggle")?.addEventListener("click", () => { const st = navState(); st.mini = !st.mini; saveNav(); applyNav(); });
+document.querySelector(".nav")?.addEventListener("click", (ev) => {
+  const b = ev.target.closest(".nav-group-btn");
+  if (!b) return;
+  const st = navState(), key = b.dataset.groupBtn;
+  if (st.mini) { st.mini = false; st.groups[key] = true; } // dari mode ikon: lebarkan dan buka grup yang diklik
+  else st.groups[key] = st.groups[key] === false;
+  saveNav(); applyNav();
+});
 
 /* ================================================================= BERANDA */
 async function viewBeranda() {
@@ -406,7 +544,7 @@ async function viewBeranda() {
       <a href="#mulai" style="margin-top:auto;font-weight:500">Mulai buat test case</a>`;
   }
   const ready = [
-    [pf.ollama ? "ok" : "err", pf.ollama ? "Mesin AI lokal menyala" : "Mesin AI lokal belum menyala. Buka aplikasi Ollama."],
+    (() => { const [k, t, sub] = aiStatus(pf); return [k, k === "ok" ? t : `${t}. ${sub}.`]; })(),
     [pf.ollama && !pf.missing.length ? "ok" : "err", pf.missing.length ? `Model belum terpasang: ${pf.missing.join(", ")}` : "AI penulis, pemeriksa, dan kasus rumit tersedia"],
     [pf.prd_count ? "ok" : "err", pf.prd_count ? `${pf.prd_count} dokumen PRD siap dipilih` : "Belum ada dokumen PRD"],
   ];
@@ -466,9 +604,9 @@ async function viewBeranda() {
 async function viewMulai() {
   const [pf, prds, runs] = await Promise.all([api("/api/preflight"), api("/api/prds"), api("/api/runs")]);
   const chosen = S.mulaiPrd && prds.some((p) => p.file === S.mulaiPrd) ? S.mulaiPrd : (prds[0] || {}).file;
-  const roleRows = pf.models.map((m) => [m.ok ? "ok" : "err", `AI ${m.role.toLowerCase()} ${m.ok ? "tersedia" : "belum terpasang"}`, m.ok ? m.name : `Unduh dengan: ollama pull ${m.name}`]);
+  const roleRows = pf.models.map((m) => [m.ok ? "ok" : "err", `AI ${m.role.toLowerCase()} ${m.ok ? "tersedia" : "belum terpasang"}`, m.ok ? m.name : pullHint(pf, m.name)]);
   const rows = [
-    [pf.ollama ? "ok" : "err", pf.ollama ? "Mesin AI lokal menyala" : "Mesin AI lokal belum menyala", pf.ollama ? "Berjalan di laptop ini" : "Buka aplikasi Ollama, lalu klik Periksa ulang"],
+    aiStatus(pf),
     ...(pf.ollama ? roleRows : []),
     [prds.length ? "ok" : "err", prds.length ? `${prds.length} dokumen PRD tersedia` : "Belum ada dokumen PRD", prds.length ? "" : "Tambahkan file .md dengan tombol Tambah dokumen PRD"],
   ];
@@ -491,8 +629,10 @@ async function viewMulai() {
         ${prds.length ? `<select id="prd-select" name="prd">${prds.map((p) => `<option value="${esc(p.file)}" ${p.file === chosen ? "selected" : ""}>${esc(p.title)}</option>`).join("")}</select>
           <span class="hint" id="prd-file-name">File: ${esc(chosen || "")}</span>` : `<span class="muted" id="prd-empty">Belum ada dokumen.</span>`}
       </label>
-      <div><button type="button" class="btn" data-action="upload">Tambah dokumen PRD</button>
+      <div class="actions"><button type="button" class="btn" data-action="upload">Tambah dokumen PRD</button>
+        ${prds.length ? `<button type="button" class="btn" data-action="prd-del" ${pf.active_run ? "disabled" : ""}>Hapus dokumen ini</button>` : ""}
         <input type="file" id="prd-file" accept=".md" hidden></div>
+      <p class="tiny muted">Daftar ini dibaca langsung dari folder <span class="mono">knowledge\prd</span>: file yang dihapus atau dipindah dari folder itu otomatis hilang dari daftar.</p>
       <div class="actions" style="padding-top:4px">
         <button type="button" class="btn btn-primary" data-action="start" ${pf.ready ? "" : "disabled"}>Mulai buat test case</button>
         <span class="small muted" id="estimate">${esc(chosen ? estimate(chosen) : "")}</span></div>
@@ -585,6 +725,25 @@ const FLOWS = [
     ],
   },
   {
+    id: "banding", title: "Bandingkan test case", note: "Generator Test Case PRD",
+    steps: [
+      ["in", "Test case A dan B", "Dua kumpulan test case dari Riwayat atau file Excel/JSON, mis. hasil dari desain dan dari PRD."],
+      ["code", "Rapikan & kembar persis", "Kata pembuka dibuang, kata bermakna sama disamakan (tampil = muncul = displayed). Yang isinya sama persis langsung jadi Sama."],
+      ["code", "Skor kemiripan & bertentangan", "Dibandingkan per Sub Module: judul, Test Data, hasil harapan. Data sama tapi hasil berlawanan langsung ditandai Bertentangan."],
+      ["ai", "Kemiripan makna", "Model embedding (ringan) menangkap kalimat beda kata tetapi sama maksud. Bukan AI chat, jadi cepat."],
+      ["ai", "AI untuk yang ragu", "AI penulis hanya menilai pasangan yang masih ragu, beberapa sekaligus, dengan status yang sudah ditentukan. Mode cepat melewati langkah ini."],
+      ["out", "Laporan perbandingan", "Berpasangan, Hanya di A, Hanya di B, Bertentangan, Kembar, Perlu dicek, kesimpulan, dan Excel."],
+    ],
+  },
+  {
+    id: "mdpdf", title: "MD Konversi ke PDF", note: "Konversi Dokumen",
+    steps: [
+      ["in", "File .md", "File PRD .md dari laptop (mis. unduhan Catatan atau Desain Konversi ke PRD), atau PRD yang sudah ada di TƎRᗩ."],
+      ["code", "Baca format", "Judul, paragraf, daftar, tabel, kutipan, dan blok kode dikenali. Tanpa AI, jadi selesai dalam hitungan detik."],
+      ["out", "PDF A4", "PDF rapi bernomor halaman langsung diunduh. Tidak ada file yang disimpan di TƎRᗩ."],
+    ],
+  },
+  {
     id: "generator", title: "Generator Test Case PRD", note: "Generator Test Case PRD",
     steps: [
       ["in", "Dokumen PRD", "PRD dipilih di menu Mulai baru, termasuk PRD hasil konversi catatan."],
@@ -605,7 +764,7 @@ function flowHtml(f, models) {
   const step = (s, i) => {
     const [kind, title, desc] = s;
     const [tag, cls] = FLOW_TAG[kind];
-    const who = kind === "ai" || kind === "mix" ? (/pemeriksa/i.test(title) ? models.judge : models.gen) : "";
+    const who = (kind === "ai" || kind === "mix") && !/makna/i.test(title) ? (/pemeriksa/i.test(title) ? models.judge : models.gen) : "";
     return `<li class="fstep" style="--i:${i};--n:${n}">
       <span class="fnum" aria-hidden="true">${i + 1}</span>
       <div class="fbody"><div class="fhead"><strong>${esc(title)}</strong><span class="ftag ${cls}">${esc(tag)}</span></div>
@@ -625,10 +784,72 @@ function flowHtml(f, models) {
     <ol class="flow">${html}</ol></section>`;
 }
 
+/* ---------- siapa yang mengatur alur (orkestrator) */
+function orchestratorHtml(models, src) {
+  const shared = (src || {}).mode === "server";
+  const layer = (n, title, sub, boxes) => `<li class="olayer" style="--i:${n}">
+      <div class="olayer-head"><span class="fnum" aria-hidden="true" style="--i:${n};--n:5">${n + 1}</span><div><strong>${esc(title)}</strong><p>${esc(sub)}</p></div></div>
+      <div class="oboxes">${boxes.map(([t, d, file, tag]) => `<div class="obox">
+        <div class="fhead"><strong>${esc(t)}</strong>${tag === "now" ? `<span class="ftag tag-in">Dipakai sekarang</span>` : tag ? `<span class="ftag ${FLOW_TAG[tag][1]}">${esc(FLOW_TAG[tag][0])}</span>` : ""}</div>
+        <p>${esc(d)}</p>${file ? `<span class="ofile mono">${esc(file)}</span>` : ""}</div>`).join("")}</div></li>`;
+  const node = (code, name, tag, desc) => `<li class="gnode"><div class="gbox">
+      <div class="fhead"><span class="mono gcode">${esc(code)}</span><strong>${esc(name)}</strong><span class="ftag ${FLOW_TAG[tag][1]}">${esc(FLOW_TAG[tag][0])}</span></div>
+      <p>${esc(desc)}</p></div></li>`;
+  return `
+  <section class="card" aria-labelledby="orc-title">
+    <div class="card-head"><h2 id="orc-title">Siapa yang mengatur alurnya?</h2><span class="tiny muted">Orkestrator</span></div>
+    <p class="small">Di TƎRᗩ, yang mengatur urutan langkah (<b>orkestrator</b>) adalah <b>kode program, bukan AI</b>. AI hanya dipanggil sebagai pekerja di langkah tertentu dan tidak bisa mengubah urutan, melewati pemeriksaan, atau menambah langkah. Karena itu alurnya selalu sama dan hasilnya bisa ditelusuri.</p>
+    <ol class="olayers">
+      ${layer(0, "Kamu", "Memilih fitur dan menekan tombol di dashboard (browser).", [["Dashboard TƎRᗩ", "Tampilan yang kamu pakai sekarang.", "dashboard/index.html, app.js"]])}
+      ${layer(1, "Manajer proses", "Menerima perintah dari dashboard dan menjaga proses tetap tertib.", [["dashboard.py", "Hanya satu proses AI berjalan dalam satu waktu, mencatat progres dan perkiraan waktu, menyediakan tombol Hentikan, dan menjaga laptop tidak tidur selama proses.", "dashboard.py", "code"]])}
+      ${layer(2, "Orkestrator per fitur", "Setiap fitur punya pengatur urutannya sendiri.", [
+        ["Generator Test Case PRD", "Diatur LangGraph: diagram langkah dengan simpang keputusan (lihat di bawah).", "tc_workflows/tc_graph.py", "code"],
+        ["Catatan Konversi ke PRD", "Langkah berurutan: baca per baris, penjaga anti-karangan, susun per fitur, simpan.", "free_text_to_prd/pipeline.py", "code"],
+        ["Desain Konversi ke PRD", "Langkah berurutan: potong layar, baca teks, kenali elemen, susun PRD, simpan.", "design_to_prd/pipeline.py", "code"],
+        ["Bandingkan test case", "Saringan bertingkat: kode dulu, lalu kemiripan makna, AI chat hanya untuk pasangan yang ragu.", "tc_compare/pipeline.py", "code"],
+        ["MD Konversi ke PDF", "Satu langkah tanpa AI, jadi tidak butuh orkestrator.", "tools/md_pdf.py", "code"]])}
+      ${layer(3, "Pekerja", "Dipanggil orkestrator untuk mengerjakan satu tugas, lalu hasilnya dicek lagi oleh kode.", [
+        ["AI penulis", `Menulis test case, mengambil aturan dari catatan, mengenali jenis elemen desain. (${models.gen})`, "agents/, tools/llm.py", "ai"],
+        ["AI pemeriksa", `Memeriksa ulang test case yang hasilnya belum pasti. (${models.judge})`, "agents/semantic_verifier_agent.py", "ai"],
+        ["Aturan kode", "Pemeriksaan pasti: format, kutipan asli, batas nilai, test case kembar, cakupan PRD.", "agents/, tools/", "code"],
+        ["Pembaca teks Windows", "Membaca huruf di gambar desain persis apa adanya.", "design_to_prd/ocr.py", "code"]])}
+      ${layer(4, "Mesin AI", "Tempat model AI benar-benar dijalankan, sesuai Pengaturan > Sumber AI.", [
+        ["Ollama di laptop ini", "Semua proses dan data tetap di laptop ini.", "", shared ? "" : "now"],
+        ["Server AI bersama", "AI di komputer teman lewat Tailscale, wajib login. Dokumen tetap di laptop ini; server hanya menjalankan AI.", "ai_server/", shared ? "now" : ""]])}
+    </ol>
+  </section>
+  <section class="card" aria-labelledby="graph-title">
+    <div class="card-head"><h2 id="graph-title">Orkestrator Generator Test Case PRD (LangGraph)</h2><span class="tiny muted mono">tc_workflows/tc_graph.py</span></div>
+    <p class="small">LangGraph menjalankan langkah seperti diagram alur. Setelah setiap kelompok skenario diperiksa, ada <b>simpang keputusan</b> yang menentukan langkah berikutnya dengan aturan pasti, bukan tebakan AI.</p>
+    <ol class="gflow">
+      ${node("atomize", "Pecah aturan", "code", "PRD dipecah menjadi aturan kecil. AI hanya dipakai bila PRD tidak punya nomor FR/BR.")}
+      ${node("design", "Rancang skenario", "mix", "Teknik uji dipilih: batas nilai, partisi, decision table, state transition. Skenario dimasukkan ke antrean.")}
+      <li class="gloop"><span class="floop-label"><span class="spin-ico" aria-hidden="true">&#8635;</span> Diulang sampai antrean habis</span>
+        <ol class="gflow">
+          ${node("prepare_batch", "Ambil kelompok", "code", "Mengambil beberapa skenario berikutnya dari antrean (atur jumlahnya di Pengaturan).")}
+          ${node("expand", "Tulis test case", "ai", "AI penulis menulis test case untuk kelompok ini.")}
+          ${node("verify", "Periksa", "mix", "Kode mengecek format dan isi; yang ragu ditandai untuk AI pemeriksa.")}
+          <li class="gnode gdecide"><div class="gbox">
+            <div class="fhead"><span class="mono gcode">route_after_verify</span><strong>Simpang keputusan</strong><span class="ftag tag-code">Kode</span></div>
+            <ul class="gbranch">
+              <li><b>Masih ada yang belum lolos</b> di kelompok ini: kembali ke <span class="mono">expand</span> untuk ditulis ulang (dibatasi "Batas menulis ulang").</li>
+              <li><b>Antrean masih ada</b>: kembali ke <span class="mono">prepare_batch</span> untuk kelompok berikutnya.</li>
+              <li><b>Semua selesai</b>: lanjut ke pemeriksaan akhir.</li>
+            </ul></div></li>
+        </ol></li>
+      ${node("judge_end", "Pemeriksaan akhir", "ai", "AI pemeriksa memeriksa ulang skenario yang hasilnya belum pasti, sekaligus di akhir supaya laptop tidak bolak-balik memuat AI.")}
+      ${node("coverage", "Cek cakupan", "mix", "Memastikan setiap bagian PRD punya test case; yang belum ada dicatat di halaman Cakupan.")}
+      ${node("export", "Buat Excel", "code", "Test case disusun menjadi file Excel siap unduh.")}
+    </ol>
+    <p class="tiny muted">Yang menyalakan diagram ini: <span class="mono">run.py</span> (fungsi run_pipeline), dipanggil dashboard saat kamu klik Mulai buat test case.</p>
+  </section>`;
+}
+
 async function viewAlur() {
-  let models = { gen: "AI penulis", judge: "AI pemeriksa" };
+  let models = { gen: "AI penulis", judge: "AI pemeriksa" }, src = null;
   try {
     const pf = await api("/api/preflight");
+    src = pf.source;
     const by = (r) => (pf.models.find((m) => new RegExp(r, "i").test(m.role)) || {}).name;
     models = { gen: by("penulis") || models.gen, judge: by("pemeriksa") || models.judge };
   } catch (e) { /* tanpa nama model pun diagram tetap tampil */ }
@@ -637,8 +858,12 @@ async function viewAlur() {
   <header class="page-head"><div><h1>Alur kerja TƎRᗩ</h1>
     <p class="muted">Urutan proses yang terjadi di balik layar. Label <span class="ftag tag-ai">AI</span> berarti dikerjakan model AI di laptop ini, <span class="ftag tag-code">Kode</span> berarti aturan pasti yang dicek program (bukan tebakan AI).</p></div>
     <div class="actions"><button type="button" class="btn" data-action="flow-toggle">${paused ? "Putar animasi" : "Jeda animasi"}</button></div></header>
-  <div class="grid grid-2 flows${paused ? " paused" : ""}">${FLOWS.map((f) => flowHtml(f, models)).join("")}</div>
-  <p class="small muted">Alur bisa disambung: hasil Catatan Konversi ke PRD dan Desain Konversi ke PRD bisa langsung dipakai di Generator Test Case PRD lewat tombol "Buat test case dari PRD ini".</p>`;
+  <div class="flows${paused ? " paused" : ""}" style="display:flex;flex-direction:column;gap:24px">
+    ${orchestratorHtml(models, src)}
+    <h2 class="sec-title">Langkah setiap fitur</h2>
+    <div class="grid grid-2">${FLOWS.map((f) => flowHtml(f, models)).join("")}</div>
+  </div>
+  <p class="small muted">Alur bisa disambung: hasil Catatan Konversi ke PRD dan Desain Konversi ke PRD bisa langsung dipakai di Generator Test Case PRD lewat tombol "Buat test case dari PRD ini", atau dijadikan PDF lewat tombol "Jadikan PDF"./p>`;
 }
 
 /* ================================================================= CATATAN QA -> PRD */
@@ -706,8 +931,11 @@ function notesResult(r, kind) {
       <textarea id="nr-md" class="notes tall">${esc((S.editedMd || {})[r.prd_file] ?? r.markdown)}</textarea></label>
     <div class="actions">
       <button type="button" class="btn" data-action="notes-save" data-file="${esc(r.prd_file)}">Simpan perubahan</button>
+      <button type="button" class="btn" data-action="notes-md" data-file="${esc(r.prd_file)}">Unduh PRD (.md)</button>
+      <button type="button" class="btn" data-action="notes-pdf" data-file="${esc(r.prd_file)}">Jadikan PDF</button>
       <button type="button" class="btn btn-primary" data-action="notes-use" data-file="${esc(r.prd_file)}">Buat test case dari PRD ini</button>
     </div>
+    <p class="tiny muted">Unduh dan Jadikan PDF memakai isi PRD yang tampil di atas, termasuk editan yang belum disimpan.</p>
     <div class="actions" style="margin-top:4px;padding-top:12px;border-top:1px solid var(--line-soft)">
       <button type="button" class="btn" data-action="${design ? "design-reset" : "notes-reset"}">Mulai ulang (konversi baru)</button>
       <button type="button" class="btn" data-action="conv-delete" data-conv="${esc(r.id)}">Hapus hasil ini</button>
@@ -1386,6 +1614,369 @@ async function deleteRun(id) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ================================================================= BANDINGKAN TEST CASE
+   Kode dulu (rapikan, kembar persis, kunci struktur, skor kemiripan, cek bertentangan), lalu kemiripan makna,
+   dan AI chat hanya untuk pasangan yang masih ragu. */
+const CMP_STATUS = { sama: ["Sama", "ok"], berkaitan: ["Berkaitan", "info"], sebagian: ["Sebagian", "brand"], bertentangan: ["Bertentangan", "err"], perlu_dicek: ["Perlu dicek", ""], berbeda: ["Berbeda", "grey"] };
+const CMP_BY = { kode: "Kode", makna: "Kode + kemiripan makna", ai: "AI", mode_cepat: "Kode (mode cepat)" };
+const CMP_PHASE = { rapikan: "Merapikan teks test case", makna: "Menghitung kemiripan makna", cocokkan: "Mencocokkan test case", ai: "AI menilai pasangan yang ragu", simpulkan: "Menyusun kesimpulan", selesai: "Selesai" };
+
+function cmpState() {
+  S.cmp = S.cmp || { a: { kind: "run", id: "", label: "Kumpulan A", file: null }, b: { kind: "run", id: "", label: "Kumpulan B", file: null }, mode: "lengkap", name: "" };
+  return S.cmp;
+}
+function stopCompareTimer() { if (S.cmpTimer) { clearInterval(S.cmpTimer); S.cmpTimer = null; } }
+
+function cmpSideHtml(side, st, sources, locked) {
+  const s = st[side], U = side.toUpperCase();
+  const fileBox = s.file
+    ? `<div class="cmp-file"><div><span class="mono">${esc(s.file.name)}</span><br><span class="small">${num(s.file.count)} test case terbaca${s.file.sheet ? ` dari sheet "${esc(s.file.sheet)}"` : ""}.</span>
+        ${(s.file.columns || []).length ? `<br><span class="tiny muted">Kolom dikenali: ${esc(s.file.columns.join(", "))}</span>` : ""}
+        ${(s.file.missing || []).length ? `<br><span class="tiny" style="color:var(--warn)">Kolom kosong: ${esc(s.file.missing.join(", "))}. Perbandingan tetap jalan, hanya kurang teliti.</span>` : ""}</div>
+        ${locked ? "" : `<button type="button" class="btn btn-small" data-action="cmp-file-clear" data-side="${side}">Ganti file</button>`}</div>`
+    : s.uploading ? `<p class="small"><span class="spinner" aria-hidden="true"></span>Membaca ${esc(s.uploading)}...</p>`
+      : `<div class="mdrop" id="cmp-file-${side}" data-cdrop="${side}" tabindex="-1">
+          <label class="btn"><input type="file" accept=".xlsx,.json" data-cfile="${side}" class="sr-only">Pilih file</label>
+          <span class="small muted">Excel (.xlsx) atau JSON, maks. 20 MB. Bisa juga diseret ke sini.</span></div>`;
+  return `<section class="card" aria-labelledby="cmp-h-${side}"><h2 id="cmp-h-${side}">Test case ${U}</h2>
+    <label class="field" for="cmp-label-${side}">Nama kumpulan
+      <input id="cmp-label-${side}" type="text" maxlength="30" data-cfield="label" data-side="${side}" value="${esc(s.label)}" placeholder="mis. Dari desain" ${locked ? "disabled" : ""}>
+      <span class="hint">Dipakai di hasil, mis. "Dari desain" dan "Dari PRD".</span></label>
+    <fieldset id="cmp-src-${side}"><legend>Sumber</legend><div class="src-pick">
+      <label class="radio-card"><input type="radio" name="cmp-src-${side}" value="run" ${s.kind === "run" ? "checked" : ""} ${locked || !sources.length ? "disabled" : ""}><span><b>Dari Riwayat</b><br><span class="tiny muted">${sources.length ? `${num(sources.length)} hasil Generator Test Case PRD` : "Belum ada hasil test case yang selesai"}</span></span></label>
+      <label class="radio-card"><input type="radio" name="cmp-src-${side}" value="file" ${s.kind === "file" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Unggah file</b><br><span class="tiny muted">Excel atau JSON dari mana saja</span></span></label>
+    </div></fieldset>
+    ${s.kind === "run"
+      ? `<label class="field" for="cmp-run-${side}">Hasil run
+          ${sources.length ? `<select id="cmp-run-${side}" data-cfield="id" data-side="${side}" ${locked ? "disabled" : ""}><option value="">Pilih hasil run...</option>
+            ${sources.map((r) => `<option value="${esc(r.id)}" ${r.id === s.id ? "selected" : ""}>${esc(r.title)} · ${esc(fmtDate(r.finished))}${r.test_cases != null ? ` · ${num(r.test_cases)} TC` : ""}</option>`).join("")}</select>`
+            : ""}</label>`
+      : `<div class="field"><span>File test case</span>${fileBox}</div>`}
+  </section>`;
+}
+
+function cmpProgressHtml(d) {
+  const P = d.progress || {}, now = d.now || Date.now() / 1000;
+  const el = Math.max(0, now - (d.started || now));
+  let pctv = 5, detail = "", remain = null;
+  if (P.phase === "makna" && P.emb_total) { pctv = 10 + Math.round(30 * P.emb_done / P.emb_total); detail = ` — ${num(P.emb_done)} dari ${num(P.emb_total)}`; }
+  else if (P.phase === "cocokkan") { pctv = 40 + Math.round(10 * (P.match_done || 0) / Math.max(1, P.match_total || 1)); }
+  else if (P.phase === "ai" && P.ai_total) {
+    pctv = 50 + Math.round(45 * P.ai_done / P.ai_total); detail = ` — kelompok ${num(Math.min(P.ai_done + 1, P.ai_total))} dari ${num(P.ai_total)}`;
+    const secs = P.ai_secs || [], avg = secs.length ? secs.reduce((x, y) => x + y, 0) / secs.length : 60;
+    remain = Math.max(20, (P.ai_total - P.ai_done) * avg);
+  } else if (P.phase === "simpulkan") { pctv = 96; remain = d.mode === "lengkap" ? 60 : 5; }
+  return `<section class="card dprog" aria-labelledby="cp-h">
+    <div class="dprog-head"><span class="spinner big" aria-hidden="true"></span>
+      <div><h2 id="cp-h">${esc(CMP_PHASE[P.phase] || "Memulai")}${esc(detail)}</h2>
+      <p class="small muted">Sudah berjalan <strong>${esc(fmtDur(el))}</strong>${remain != null ? ` · perkiraan sisa <strong>±${esc(fmtDur(remain))}</strong>` : ""}</p></div>
+      <span class="dprog-pct">${pctv}%</span></div>
+    <div class="bar" role="progressbar" aria-label="Progres perbandingan" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pctv}"><span style="width:${pctv}%"></span></div>
+    <p class="tiny muted">${P.phase === "ai" ? "AI hanya menilai pasangan yang masih ragu; sisanya sudah diputuskan kode. " : ""}Halaman ini boleh ditinggal, prosesnya tetap jalan.</p>
+  </section>`;
+}
+
+function cmpTcCell(t) {
+  if (!t) return "-";
+  return `<span class="mono">${esc(t.no)}</span> ${esc(t.title || "-")}
+    <div class="tiny muted">${t.sub ? `${esc(t.sub)} · ` : ""}${t.category ? `${esc(t.category)} · ` : ""}Data: ${esc(t.data || "-")}</div>
+    <div class="tiny muted">Hasil: ${esc(t.expected || "-")}</div>`;
+}
+
+function cmpResultHtml(r, saved) {
+  const s = r.stats, la = r.labels.a, lb = r.labels.b, tab = S.cmpTab || "pairs";
+  const pairs = r.pairs || [];
+  const tabs = [["pairs", "Berpasangan", pairs.filter((p) => ["sama", "berkaitan", "sebagian", "bertentangan"].includes(p.status)).length],
+    ["conflict", "Bertentangan", s.bertentangan], ["review", "Perlu dicek", s.perlu_dicek],
+    ["only_a", `Hanya di ${la}`, s.a_only], ["only_b", `Hanya di ${lb}`, s.b_only], ["dup", "Kembar", s.dup_a + s.dup_b]];
+  const q = (S.cmpQ || "").toLowerCase();
+  const hit = (...xs) => !q || xs.some((x) => String(x || "").toLowerCase().includes(q));
+  let rows = [], head = "";
+  if (["pairs", "conflict", "review"].includes(tab)) {
+    const want = tab === "pairs" ? ["sama", "berkaitan", "sebagian", "bertentangan"] : tab === "conflict" ? ["bertentangan"] : ["perlu_dicek"];
+    rows = pairs.filter((p) => want.includes(p.status) && hit(p.a, p.b, p.alasan, p.a_tc.title, p.b_tc.title));
+    head = `<tr><th>Status</th><th>${esc(la)}</th><th>${esc(lb)}</th><th>Alasan</th></tr>`;
+    rows = rows.map((p) => `<tr><td class="nw"><span class="chip ${CMP_STATUS[p.status][1]}">${esc(CMP_STATUS[p.status][0])}</span><div class="tiny muted">skor ${esc(String(p.skor).replace(".", ","))}<br>${esc(CMP_BY[p.by] || p.by)}</div></td>
+      <td>${cmpTcCell(p.a_tc)}</td><td>${cmpTcCell(p.b_tc)}</td><td class="small">${esc(p.alasan)}</td></tr>`);
+  } else if (tab === "only_a" || tab === "only_b") {
+    const other = tab === "only_a" ? lb : la;
+    rows = r[tab].filter((t) => hit(t.no, t.title, t.sub, t.expected)).map((t) => `<tr><td>${cmpTcCell(t)}</td>
+      <td class="small">${t.mirip ? `Paling mirip: <span class="mono">${esc(t.mirip)}</span> (skor ${esc(String(t.mirip_skor).replace(".", ","))})` : `Tidak ada yang mirip di ${esc(other)}`}</td></tr>`);
+    head = `<tr><th>Test case</th><th>Catatan</th></tr>`;
+  } else {
+    const d = [...r.duplicates.a.map((x) => [la, x]), ...r.duplicates.b.map((x) => [lb, x])].filter(([, x]) => hit(x.a, x.b));
+    rows = d.map(([l, x]) => `<tr><td>${esc(l)}</td><td class="mono">${esc(x.a)}</td><td class="mono">${esc(x.b)}</td><td class="small">${esc(x.alasan)}</td></tr>`);
+    head = `<tr><th>Kumpulan</th><th>Test case</th><th>Kembar dengan</th><th>Alasan</th></tr>`;
+  }
+  const limit = S.cmpLimit || 100, shown = rows.slice(0, limit);
+  const c = r.conclusion || {};
+  return `
+  <section class="card" aria-labelledby="cr-h">
+    <div class="card-head"><div><h2 id="cr-h">${esc(r.name)}</h2>
+      <p class="small muted">${esc(la)}: ${esc(r.sources.a.source)} · ${esc(lb)}: ${esc(r.sources.b.source)} · ${r.mode === "lengkap" ? "Mode lengkap" : "Mode cepat"}${r.stats.seconds != null ? ` · ${esc(fmtDur(r.stats.seconds))}` : ""}</p></div>
+      <div class="actions">${r.id ? `<a class="btn btn-primary" href="/api/compares/${encodeURIComponent(r.id)}/xlsx">Unduh Excel</a>` : ""}
+        ${saved ? `<a class="btn" href="#banding">Kembali</a>` : `<button type="button" class="btn" data-action="cmp-reset">Perbandingan baru</button>`}</div></div>
+    <div class="stat-strip" style="border:0">
+      <div class="stat"><b>${esc(pctTxt(s.a_coverage))}</b><span>${esc(la)} berpasangan (${num(s.a_paired)} dari ${num(s.a_total)})</span></div>
+      <div class="stat"><b>${esc(pctTxt(s.b_coverage))}</b><span>${esc(lb)} berpasangan (${num(s.b_paired)} dari ${num(s.b_total)})</span></div>
+      <div class="stat${s.bertentangan ? " warn" : ""}"><b>${num(s.bertentangan)}</b><span>bertentangan</span></div>
+      <div class="stat${s.perlu_dicek ? " warn" : ""}"><b>${num(s.perlu_dicek)}</b><span>perlu dicek</span></div>
+    </div>
+  </section>
+  <section class="card" aria-labelledby="cc-h"><h2 id="cc-h">Kesimpulan</h2>
+    ${r.ai_summary ? `<p>${esc(r.ai_summary)} <span class="ftag tag-ai">AI</span></p>` : ""}
+    ${(c.summary || []).map((l) => `<p class="small">${esc(l)}</p>`).join("")}
+    <h3 class="rel-group">Rekomendasi</h3><ul class="rel-list">${(c.recommendations || []).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${(r.notes || []).length ? `<p class="tiny" style="color:var(--warn)">${esc(r.notes.join(" "))}</p>` : ""}
+    <p class="tiny muted">${esc((c.limits || []).join(" "))} Diputuskan kode: ${num(s.decided_by_code)} pasangan; dinilai AI: ${num(s.judged_by_ai)} pasangan.</p>
+  </section>
+  <section class="card" aria-labelledby="ct-h" style="gap:12px">
+    <h2 id="ct-h" class="sr-only">Detail</h2>
+    <div class="cmp-tabs" role="tablist">${tabs.map(([k, l, n]) => `<button type="button" role="tab" aria-selected="${k === tab}" data-action="cmp-tab" data-tab="${k}">${esc(l)} <span class="num">${num(n)}</span></button>`).join("")}</div>
+    <input type="search" id="cmp-q" placeholder="Cari nomor, judul, atau alasan..." value="${esc(S.cmpQ || "")}" aria-label="Cari di tabel">
+    ${rows.length ? `<div class="table-wrap"><table class="cmp-table${["only_a", "only_b", "dup"].includes(tab) ? " two" : ""}"><thead>${head}</thead><tbody>${shown.join("")}</tbody></table></div>
+      ${rows.length > limit ? `<button type="button" class="btn" data-action="cmp-more">Tampilkan ${num(Math.min(100, rows.length - limit))} lagi (dari ${num(rows.length)})</button>` : ""}`
+      : `<p class="muted">Tidak ada data di bagian ini.</p>`}
+  </section>`;
+}
+const pctTxt = (v) => `${String(Math.round((v || 0) * 10) / 10).replace(".", ",")}%`;
+
+async function viewBanding(arg) {
+  stopCompareTimer();
+  if (arg) {
+    const r = await api(`/api/compares/${encodeURIComponent(arg)}`);
+    if (S.cmpView !== arg) { S.cmpView = arg; S.cmpTab = "pairs"; S.cmpQ = ""; S.cmpLimit = 100; }
+    app.innerHTML = `<header class="page-head"><div><p class="tiny muted">Generator Test Case PRD</p><h1>Bandingkan test case</h1></div></header>${cmpResultHtml(r, true)}`;
+    S.cmpShown = r;
+    return;
+  }
+  const [d, sources, past] = await Promise.all([api("/api/compare"), api("/api/compare/sources"), api("/api/compares")]);
+  const st = cmpState();
+  if (!sources.length) ["a", "b"].forEach((k) => { if (st[k].kind === "run") st[k].kind = "file"; }); // belum ada hasil run: langsung unggah file
+  const running = d.status === "berjalan", res = d.status === "selesai" ? d.result : null;
+  if (res && S.cmpView !== res.id) { S.cmpView = res.id; S.cmpTab = "pairs"; S.cmpQ = ""; S.cmpLimit = 100; }
+  S.cmpShown = res;
+  const locked = running;
+  app.innerHTML = `
+  <header class="page-head"><div><p class="tiny muted">Generator Test Case PRD</p><h1>Bandingkan test case</h1>
+    <p class="muted">Bandingkan dua kumpulan test case, mis. hasil dari desain dengan hasil dari PRD, atau versi lama dengan versi baru. Kode memutuskan yang sudah jelas, kemiripan makna mempersempit sisanya, dan AI hanya menilai pasangan yang masih ragu. Test case sumber tidak diubah.</p></div></header>
+  ${d.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Perbandingan gagal.</strong> ${esc(d.error || "")}</span><button type="button" class="btn btn-small" data-action="cmp-reset">Tutup</button></div>` : ""}
+  ${running ? `<div id="cmp-prog">${cmpProgressHtml(d)}</div>` : ""}
+  ${res ? cmpResultHtml(res, false) : `
+  ${sources.length ? "" : `<div class="banner" role="status"><span><strong>Belum ada hasil test case di Riwayat.</strong> Pilihan "Dari Riwayat" hanya berisi hasil <b>Generator Test Case PRD</b> yang sudah selesai (bukan hasil konversi PRD). Unggah file Excel/JSON test case, atau buat test case dulu.</span><a href="#mulai">Mulai buat test case</a></div>`}
+  <div class="grid grid-2">${cmpSideHtml("a", st, sources, locked)}${cmpSideHtml("b", st, sources, locked)}</div>
+  <section class="card" aria-labelledby="cmp-opt-h"><h2 id="cmp-opt-h">Cara membandingkan</h2>
+    <fieldset id="cmp-mode"><legend>Mode</legend><div class="src-pick">
+      <label class="radio-card"><input type="radio" name="cmp-mode" value="lengkap" ${st.mode === "lengkap" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Lengkap</b><br><span class="tiny muted">Kode, kemiripan makna, lalu AI untuk yang ragu. Biasanya ±10–20 menit.</span></span></label>
+      <label class="radio-card"><input type="radio" name="cmp-mode" value="cepat" ${st.mode === "cepat" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Cepat</b><br><span class="tiny muted">Tanpa AI chat, ±1 menit. Pasangan yang ragu masuk Perlu dicek.</span></span></label>
+    </div></fieldset>
+    <ul class="ready-list" style="margin:0">
+      <li>${icon(d.embed ? "ok" : "warn")}<span><span style="font-weight:500">Kemiripan makna ${d.embed ? "tersedia" : "belum tersedia"}</span><br><span class="tiny muted">${d.embed ? `Model ${esc(d.embed_model)}` : `Model ${esc(d.embed_model)} belum ada, jadi lapis ini dilewati. ${(d.ai ? "" : "AI belum terhubung. ")}Jalankan Pasang_Tera.bat, atau: ollama pull ${esc(d.embed_model)}`}</span></span></li>
+      <li>${icon(d.ai ? "ok" : "warn")}<span><span style="font-weight:500">AI ${d.ai ? "terhubung" : "belum terhubung"}</span><br><span class="tiny muted">${d.ai ? "Dipakai di mode Lengkap untuk pasangan yang ragu." : "Mode Lengkap butuh AI. Mode Cepat tetap bisa dipakai."}</span></span></li>
+    </ul>
+    <label class="field" for="cmp-name">Nama perbandingan (opsional)
+      <input id="cmp-name" type="text" maxlength="80" data-cfield="name" value="${esc(st.name)}" placeholder="${esc(`${st.a.label} vs ${st.b.label}`)}" ${locked ? "disabled" : ""}></label>
+    <div class="actions"><button type="button" class="btn btn-primary" data-action="cmp-start" ${locked || st.a.uploading || st.b.uploading ? "disabled" : ""}>${running ? "Sedang membandingkan..." : "Bandingkan"}</button>
+      <span class="small muted">Hanya satu proses yang berjalan dalam satu waktu.</span></div>
+  </section>`}
+  ${running || (d.log || []).length ? `<section class="log" aria-labelledby="cmp-log"><h2 id="cmp-log">Progres</h2><ul class="log-lines" aria-live="polite">${logHtml(d.log) || "<li>Memulai...</li>"}</ul></section>` : ""}
+  ${past.length ? `<section class="card" aria-labelledby="cmp-past"><h2 id="cmp-past">Perbandingan sebelumnya</h2>
+    <div class="table-wrap"><table><thead><tr><th>Nama</th><th>Waktu</th><th class="r">Berpasangan</th><th class="r">Bertentangan</th><th></th></tr></thead><tbody>
+    ${past.map((p) => `<tr><td>${esc(p.name)}<br><span class="tiny muted">${esc((p.labels || {}).a)} vs ${esc((p.labels || {}).b)} · ${p.mode === "lengkap" ? "Lengkap" : "Cepat"}</span></td>
+      <td class="nw small">${esc(fmtDate(p.time))}</td>
+      <td class="r small">${esc(pctTxt((p.stats || {}).a_coverage))} / ${esc(pctTxt((p.stats || {}).b_coverage))}</td>
+      <td class="r num">${num((p.stats || {}).bertentangan)}</td>
+      <td><div class="actions" style="justify-content:flex-end"><a class="btn btn-small" href="#banding/${encodeURIComponent(p.id)}">Lihat</a>
+        <a class="btn btn-small" href="/api/compares/${encodeURIComponent(p.id)}/xlsx">Excel</a>
+        <button type="button" class="btn btn-small" data-action="cmp-del" data-cmp="${esc(p.id)}">Hapus</button></div></td></tr>`).join("")}
+    </tbody></table></div></section>` : ""}`;
+  if (running) {
+    let last = { ...d, _at: Date.now() / 1000 }, tick = 0;
+    S.cmpTimer = setInterval(async () => {
+      if (!location.hash.startsWith("#banding")) return stopCompareTimer();
+      tick++;
+      if (tick % 2 === 0) {
+        const m = await api("/api/compare").catch(() => null);
+        if (m && m.status !== "berjalan") { stopCompareTimer(); return viewBanding(); }
+        if (m) { last = { ...m, _at: Date.now() / 1000 }; const ul = document.querySelector(".log-lines"); if (ul) ul.innerHTML = logHtml(m.log); }
+      }
+      const box = document.getElementById("cmp-prog");
+      if (box) box.innerHTML = cmpProgressHtml({ ...last, now: (last.now || last._at) + (Date.now() / 1000 - last._at) });
+    }, 1000);
+  }
+}
+
+function cmpRerenderTable() {
+  const r = S.cmpShown; if (!r) return;
+  const saved = location.hash.startsWith("#banding/");
+  const cards = app.querySelectorAll("section.card");
+  const html = cmpResultHtml(r, saved);
+  const tmp = document.createElement("div"); tmp.innerHTML = html;
+  const fresh = tmp.querySelectorAll("section.card"), old = [...cards].filter((c) => c.querySelector("#ct-h"));
+  if (old[0] && fresh[2]) old[0].replaceWith(fresh[2]);
+}
+
+async function cmpUpload(side, file) {
+  const st = cmpState(), s = st[side];
+  const box = () => document.getElementById(`cmp-file-${side}`);
+  const err = !/\.(xlsx|json)$/i.test(file.name) ? `${file.name}: format harus Excel (.xlsx) atau JSON (.json).`
+    : !file.size ? `${file.name}: file kosong.` : file.size > 20 * 1024 * 1024 ? `${file.name}: ukuran file maksimal 20 MB.` : "";
+  if (err) { setErr(box(), err); toast(err, true); return; }
+  s.uploading = file.name; s.file = null; await viewBanding();
+  try {
+    const data = await readDataUrl(file);
+    const r = await api("/api/compare/upload", { method: "POST", body: { name: file.name, data, side } });
+    s.file = r; s.token = r.token;
+    toast(`${file.name}: ${r.count} test case terbaca`);
+  } catch (e) { s.uploading = null; await viewBanding(); serverErr(e); return; }
+  s.uploading = null; await viewBanding();
+}
+
+async function cmpStart() {
+  const st = cmpState(), $ = (id) => document.getElementById(id);
+  const errs = [];
+  for (const side of ["a", "b"]) {
+    const s = st[side], U = side.toUpperCase(), lbl = s.label.trim();
+    errs.push([$(`cmp-label-${side}`), !lbl ? `Nama kumpulan ${U} wajib diisi.` : lbl.length > 30 ? `Nama kumpulan ${U} maksimal 30 karakter.` : /[\\/:*?"<>|]/.test(lbl) ? `Nama kumpulan ${U} tidak boleh memakai karakter \\ / : * ? " < > |` : ""]);
+    if (s.kind === "run") errs.push([$(`cmp-run-${side}`) || $(`cmp-src-${side}`), s.id ? "" : `Pilih hasil run untuk ${U}.`]);
+    else errs.push([$(`cmp-file-${side}`) || $(`cmp-src-${side}`), s.file ? "" : `Unggah file test case untuk ${U}.`]);
+  }
+  const same = st.a.kind === st.b.kind && (st.a.kind === "run" ? st.a.id && st.a.id === st.b.id : st.a.token && st.a.token === st.b.token);
+  if (same) errs.push([$("cmp-run-b") || $("cmp-src-b"), "A dan B memakai sumber yang sama. Pilih dua kumpulan test case yang berbeda."]);
+  if (st.a.label.trim() && st.a.label.trim().toLowerCase() === st.b.label.trim().toLowerCase()) errs.push([$("cmp-label-b"), "Nama kumpulan A dan B harus berbeda."]);
+  if (st.name.trim()) errs.push([$("cmp-name"), V.name(st.name, "Nama perbandingan")]);
+  if (!report(errs)) return;
+  const side = (s) => ({ kind: s.kind, id: s.id, token: s.token, label: s.label.trim() });
+  try {
+    await api("/api/compare", { method: "POST", body: { a: side(st.a), b: side(st.b), mode: st.mode, name: st.name.trim() } });
+    S.cmpView = null;
+    await viewBanding();
+    refreshNav();
+  } catch (e) { serverErr(e); }
+}
+
+/* ================================================================= MD KONVERSI KE PDF
+   Tanpa AI: PDF dibuat saat tombol diklik dan langsung diunduh, tidak disimpan dan tidak mengganggu proses lain. */
+function mdState() { S.md = S.md || { files: [], seq: 0 }; return S.md; }
+const mdTitle = (t) => ((String(t).match(/^#\s+(.+)$/m) || [])[1] || "").replace(/[*_`]/g, "").trim();
+const fmtSize = (b) => (b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toLocaleString("id-ID", { maximumFractionDigits: 1 })} KB` : `${(b / 1048576).toLocaleString("id-ID", { maximumFractionDigits: 1 })} MB`);
+
+function mdAdd(name, content, size) {
+  const M = mdState();
+  const err = V.md(name, size, content);
+  if (err) return err;
+  if (M.files.some((f) => f.name === name && f.content === content)) return `${name}: sudah ada di daftar.`;
+  M.files.push({ key: ++M.seq, name, content, size, title: mdTitle(content) });
+  return "";
+}
+
+async function mdAddFiles(files) {
+  const errs = [];
+  for (const f of files) {
+    let text = "";
+    if (/\.(md|markdown)$/i.test(f.name) && f.size <= 2000000) { try { text = await f.text(); } catch (e) { text = ""; } }
+    const e = mdAdd(f.name, text, f.size);
+    if (e) errs.push(e);
+  }
+  await viewMdpdf();
+  const box = document.getElementById("md-files");
+  if (errs.length) { setErr(box, errs.join(" ")); toast(errs.length === 1 ? errs[0] : `${errs.length} file tidak bisa ditambahkan.`, true); }
+  else if (files.length) toast(`${files.length} file ditambahkan`);
+}
+
+async function mdAddPrd() {
+  const sel = document.getElementById("md-prd");
+  if (!sel || !sel.value) { report([[sel || document.getElementById("md-files"), "Pilih PRD dulu."]]); return; }
+  try {
+    const p = await api(`/api/prds/${encodeURIComponent(sel.value)}`);
+    const e = mdAdd(p.file, p.content, new Blob([p.content]).size);
+    if (e) { report([[sel, e]]); return; }
+    S.mdPick = sel.value;
+    await viewMdpdf();
+    toast(`${p.file} ditambahkan`);
+  } catch (e) { toast(e.message, true); }
+}
+
+async function mdConvert(f) {
+  const r = await fetch("/api/md-pdf", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: f.name, content: f.content }) });
+  if (!r.ok) { let d = {}; try { d = await r.json(); } catch (e) { /* bukan JSON */ } throw new Error(d.detail || `Gagal membuat PDF (${r.status})`); }
+  return r.blob();
+}
+const pdfName = (n) => `${n.replace(/\.(md|markdown)$/i, "") || "dokumen"}.pdf`;
+
+async function mdRun(key, how, btn) {
+  const f = mdState().files.find((x) => x.key === Number(key));
+  if (!f) return;
+  const win = how === "view" ? window.open("", "_blank") : null; // dibuka langsung supaya tidak diblokir browser
+  const label = btn ? btn.innerHTML : "";
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner" aria-hidden="true"></span>Membuat PDF...`; }
+  try {
+    const blob = await mdConvert(f);
+    const url = URL.createObjectURL(blob);
+    if (win) win.location.href = url;
+    else { const a = document.createElement("a"); a.href = url; a.download = pdfName(f.name); document.body.appendChild(a); a.click(); a.remove(); toast(`${pdfName(f.name)} diunduh`); }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return true;
+  } catch (e) {
+    if (win) win.close();
+    toast(e.message, true);
+    return false;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
+  }
+}
+
+async function mdAll(btn) {
+  const files = mdState().files;
+  btn.disabled = true;
+  let ok = 0;
+  for (let i = 0; i < files.length; i++) {
+    btn.innerHTML = `<span class="spinner" aria-hidden="true"></span>Membuat PDF ${i + 1} dari ${files.length}...`;
+    if (await mdRun(files[i].key, "download")) ok++;
+    await new Promise((r) => setTimeout(r, 400)); // jeda supaya browser tidak menolak unduhan beruntun
+  }
+  btn.disabled = false; btn.textContent = "Unduh semua PDF";
+  if (ok > 1) toast(`${ok} PDF diunduh. Bila browser bertanya, izinkan unduhan beberapa file.`);
+}
+
+async function viewMdpdf() {
+  const M = mdState();
+  if (S.mdQueue) { const q = S.mdQueue; S.mdQueue = null; const e = mdAdd(q.name, q.content, new Blob([q.content]).size); if (e && !/sudah ada/.test(e)) toast(e, true); }
+  let prds = [];
+  try { prds = await api("/api/prds"); } catch (e) { /* daftar PRD opsional */ }
+  const pick = S.mdPick && prds.some((p) => p.file === S.mdPick) ? S.mdPick : "";
+  app.innerHTML = `
+  <header class="page-head"><div><p class="tiny muted">Konversi Dokumen</p><h1>MD Konversi ke PDF</h1>
+    <p class="muted">Ubah file PRD .md (hasil Catatan atau Desain Konversi ke PRD, atau buatan sendiri) menjadi PDF yang rapi untuk dibagikan. Tanpa AI: selesai dalam hitungan detik dan tidak mengganggu proses lain yang sedang berjalan.</p></div></header>
+  <div class="grid grid-2">
+    <section class="card" aria-labelledby="md-up-title"><h2 id="md-up-title">Tambah file</h2>
+      <div class="field"><span>File Markdown (.md)</span>
+        <div class="mdrop" id="md-files" data-mdrop tabindex="-1">
+          <label class="btn"><input type="file" id="md-input" accept=".md,.markdown,text/markdown" multiple class="sr-only">Pilih file .md</label>
+          <span class="small muted">atau seret file ke sini</span></div>
+        <span class="hint">Maksimal 2 MB per file. Boleh beberapa file sekaligus.</span></div>
+    </section>
+    <section class="card" aria-labelledby="md-prd-title"><h2 id="md-prd-title">Ambil dari TƎRᗩ</h2>
+      <label class="field" for="md-prd">PRD yang sudah ada
+        ${prds.length ? `<select id="md-prd"><option value="">Pilih PRD...</option>${prds.map((p) => `<option value="${esc(p.file)}" ${p.file === pick ? "selected" : ""}>${esc(p.title)} (${esc(p.file)})</option>`).join("")}</select>`
+          : `<span class="muted" style="font-weight:400">Belum ada PRD di TƎRᗩ.</span>`}</label>
+      ${prds.length ? `<div><button type="button" class="btn" data-action="md-add-prd">Tambahkan ke daftar</button></div>` : ""}
+    </section>
+  </div>
+  <section class="card" aria-labelledby="md-list-title">
+    <div class="card-head"><h2 id="md-list-title">Daftar file${M.files.length ? ` (${M.files.length})` : ""}</h2>
+      ${M.files.length ? `<div class="actions">${M.files.length > 1 ? `<button type="button" class="btn btn-primary" data-action="md-all">Unduh semua PDF</button>` : ""}
+        <button type="button" class="btn" data-action="md-clear">Kosongkan daftar</button></div>` : ""}</div>
+    ${M.files.length ? `<ul class="md-list">${M.files.map((f) => `<li>
+        <div class="md-info"><span class="mono">${esc(f.name)}</span><span class="tiny muted">${f.title ? `${esc(f.title)} · ` : ""}${esc(fmtSize(f.size))}</span></div>
+        <div class="actions"><button type="button" class="btn btn-small" data-action="md-view" data-md="${f.key}">Lihat PDF</button>
+          <button type="button" class="btn btn-small btn-primary" data-action="md-download" data-md="${f.key}">Unduh PDF</button>
+          <button type="button" class="btn btn-small" data-action="md-del" data-md="${f.key}" aria-label="Hapus ${esc(f.name)} dari daftar">Hapus</button></div></li>`).join("")}</ul>`
+      : `<p class="muted">Belum ada file. Tambahkan file .md dari laptop atau pilih PRD yang sudah ada di TƎRᗩ.</p>`}
+    <p class="tiny muted">PDF dibuat saat tombol diklik dan langsung diunduh. File .md dan PDF tidak disimpan di TƎRᗩ.</p>
+  </section>`;
+}
+
 /* ================================================================= PENGATURAN */
 const KINDS = [["decision", "Tabel keputusan"], ["edge", "Kasus tepi"], ["whitespace", "Spasi di awal/akhir"]];
 
@@ -1407,7 +1998,8 @@ async function viewPengaturan() {
     <div class="actions"><button type="button" class="btn" data-action="reset-config">Batalkan perubahan</button>
       <button type="button" class="btn btn-primary" data-action="save-config" ${locked ? "disabled" : ""}>Simpan pengaturan</button></div></header>
   ${locked ? `<div class="banner" role="status"><span>Pengaturan tidak bisa disimpan selama ada proses yang berjalan.</span><a href="#berjalan">Lihat progresnya</a></div>` : ""}
-  ${mi.ollama ? "" : `<div class="banner error">Mesin AI lokal belum menyala, jadi daftar model tidak bisa dibaca. Buka aplikasi Ollama lalu muat ulang halaman ini.</div>`}
+  ${mi.ollama ? "" : `<div class="banner error">${esc(aiStatus(mi)[1])}, jadi daftar model tidak bisa dibaca. ${esc(aiStatus(mi)[2])}.</div>`}
+  ${sourceCard(mi.source || { mode: "lokal" }, mi.ollama, locked)}
   <div class="grid grid-2">
     <section class="card" aria-labelledby="m-title"><h2 id="m-title">AI yang dipakai</h2>
       <label class="field" for="c-gen">AI penulis test case${sel("c-gen", cfg.generation_model)}</label>
@@ -1430,11 +2022,81 @@ async function viewPengaturan() {
       <div><span style="font-weight:500">Prioritas otomatis</span><br><span class="small">Positive menjadi ${esc((cfg.priority_rule || {}).Positive || "High")}, Negative menjadi ${esc((cfg.priority_rule || {}).Negative || "Medium")}</span></div>
     </section>
   </div>
-  <section class="card" aria-labelledby="o-title"><div class="card-head"><h2 id="o-title">AI yang terpasang di laptop ini</h2></div>
+  <section class="card" aria-labelledby="o-title"><div class="card-head"><h2 id="o-title">${(mi.source || {}).mode === "server" ? "AI yang tersedia di Server AI bersama" : "AI yang terpasang di laptop ini"}</h2></div>
     ${(mi.models || []).length ? `<div class="table-wrap"><table style="min-width:520px"><thead><tr><th>Nama AI</th><th class="r">Ukuran</th><th>Dipakai untuk</th></tr></thead><tbody>
       ${mi.models.map((m) => `<tr><td class="mono">${esc(m.name)}</td><td class="r num">${esc(gb(m.size))}</td><td class="${m.use.length ? "" : "muted"}">${esc(m.use.join(", ") || "Tidak dipakai")}</td></tr>`).join("")}
       </tbody></table></div>` : '<p class="muted">Belum ada model yang terbaca.</p>'}
   </section>`;
+}
+
+/* ---------- Sumber AI: laptop ini atau Server AI bersama (lewat Tailscale, wajib login) */
+function sourceCard(src, ok, locked) {
+  const want = S.sourcePick || src.mode;
+  const fmtExp = (t) => new Date(t * 1000).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+  let body;
+  if (want !== "server") {
+    body = `<p class="small muted">TƎRᗩ memakai Ollama di laptop ini. Semua proses dan data tetap di laptop ini.</p>`;
+  } else if (src.mode === "server" && src.logged_in) {
+    body = `<div class="src-status"><span>${icon(ok ? "ok" : "err")}</span><div>
+        <div style="font-weight:500">${ok ? "Terhubung" : esc(aiStatus({ ollama: ok, source: src })[1])} sebagai <span class="mono">${esc(src.username)}</span></div>
+        <div class="tiny muted">Server <span class="mono">${esc(src.url)}</span>${src.expires ? `. Login berlaku sampai ${esc(fmtExp(src.expires))}` : ""}</div>
+        ${ok ? "" : `<div class="tiny muted">${esc(aiStatus({ ollama: ok, source: src })[2])}.</div>`}</div></div>
+      ${src.too_old || src.update_available ? `<p class="small ${src.too_old ? "err-text" : "muted"}">Server memakai TƎRᗩ versi ${esc(src.server_version)}${src.too_old ? ` dan mewajibkan minimal versi ${esc(src.min_version)}` : ""}; laptop ini versi ${esc(src.version)}. <a href="#versi">Lihat detail</a></p>` : ""}
+      <p class="small muted">Dokumen tetap disimpan di laptop ini. Server hanya menjalankan AI dan mencatat jumlah pemakaian, bukan isi dokumen.</p>
+      <div class="actions"><button type="button" class="btn" data-action="src-logout" ${locked ? "disabled" : ""}>Keluar</button></div>`;
+  } else {
+    body = `<p class="small muted">Isi alamat dan akun dari pemilik Server AI. Laptop ini harus tersambung ke Tailscale.</p>
+      <form id="src-form" class="fields" novalidate autocomplete="off">
+        <label class="field" for="sa-url">Alamat server<input id="sa-url" inputmode="url" spellcheck="false" maxlength="200" placeholder="http://100.101.102.103:11500" value="${esc(src.url || "")}">
+          <span class="hint">Dari pemilik server, mis. http://100.101.102.103:11500</span></label>
+        <label class="field" for="sa-user">Nama pengguna<input id="sa-user" autocomplete="username" spellcheck="false" maxlength="32" value="${esc(src.username || "")}"></label>
+        <label class="field" for="sa-pass">Password<input id="sa-pass" type="password" autocomplete="current-password" maxlength="128"></label>
+        <div class="actions" style="padding-top:27px"><button type="submit" class="btn btn-primary" ${locked ? "disabled" : ""}>Masuk</button></div>
+      </form>`;
+  }
+  return `<section class="card" aria-labelledby="src-title"><h2 id="src-title">Sumber AI</h2>
+    <div class="src-pick" role="radiogroup" aria-label="Sumber AI">
+      <label class="radio-card"><input type="radio" name="src" value="lokal" ${want !== "server" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>AI di laptop ini</b><br><span class="tiny muted">Ollama di laptop ini</span></span></label>
+      <label class="radio-card"><input type="radio" name="src" value="server" ${want === "server" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Server AI bersama</b><br><span class="tiny muted">AI di komputer teman, lewat Tailscale</span></span></label>
+    </div>${body}</section>`;
+}
+
+async function sourcePick(mode) {
+  S.sourcePick = mode;
+  if (mode === "lokal") {
+    try { await api("/api/ai-source/local", { method: "POST" }); toast("Sekarang memakai AI di laptop ini"); } catch (e) { toast(e.message, true); }
+    S.sourcePick = null;
+    refreshNav();
+  }
+  await viewPengaturan();
+  if (mode === "server") document.getElementById("sa-url")?.focus();
+}
+
+async function sourceLogin(form) {
+  const $ = (id) => document.getElementById(id);
+  const u = $("sa-url"), n = $("sa-user"), p = $("sa-pass");
+  const errs = [[u, V.serverUrl(u.value)], [n, V.username(n.value.trim())],
+    [p, p.value ? (p.value.length > 128 ? "Password maksimal 128 karakter." : "") : "Password wajib diisi."]];
+  if (!report(errs, form)) return;
+  const btn = form.querySelector("button[type=submit]");
+  btn.disabled = true; btn.innerHTML = `<span class="spinner" aria-hidden="true"></span>Menghubungkan...`;
+  try {
+    const r = await api("/api/ai-source/login", { method: "POST", body: { url: u.value.trim(), username: n.value.trim(), password: p.value } });
+    S.sourcePick = null;
+    toast(r.ok ? `Masuk sebagai ${r.username}. TƎRᗩ sekarang memakai Server AI bersama.` : `Masuk sebagai ${r.username}, tapi server belum bisa dipakai.`, !r.ok);
+    await viewPengaturan();
+    refreshNav();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Masuk";
+    if (e.field === "sa-pass") p.value = "";
+    serverErr(e);
+  }
+}
+
+async function sourceLogout() {
+  try { await api("/api/ai-source/logout", { method: "POST" }); toast("Sudah keluar dari Server AI bersama"); } catch (e) { toast(e.message, true); }
+  await viewPengaturan();
+  refreshNav();
 }
 
 async function saveConfig() {
@@ -1475,6 +2137,8 @@ async function route() {
   if (v !== "berjalan") closeStream();
   if (v !== "catatan") stopNotesTimer();
   if (v !== "desain") stopDesignTimer();
+  if (v !== "pengaturan") S.sourcePick = null;
+  if (v !== "banding") stopCompareTimer();
   try {
     if (v === "beranda") await viewBeranda();
     else if (v === "mulai") await viewMulai();
@@ -1487,6 +2151,9 @@ async function route() {
     else if (v === "cek") await viewCek(arg && decodeURIComponent(arg));
     else if (v === "riwayat") await viewRiwayat();
     else if (v === "pengaturan") await viewPengaturan();
+    else if (v === "versi") await viewVersi();
+    else if (v === "mdpdf") await viewMdpdf();
+    else if (v === "banding") await viewBanding(arg && decodeURIComponent(arg));
     else { location.hash = "#beranda"; return; }
     if (changed) { app.classList.remove("view-in"); void app.offsetWidth; app.classList.add("view-in"); }
   } catch (e) {
@@ -1500,6 +2167,18 @@ app.addEventListener("click", (ev) => {
   if (!el) return;
   const a = el.dataset.action, H = S.hasil;
   if (a === "upload") document.getElementById("prd-file").click();
+  else if (a === "prd-del") {
+    const sel = document.getElementById("prd-select"); if (!sel || !sel.value) return;
+    const file = sel.value, title = sel.options[sel.selectedIndex].textContent;
+    if (el.dataset.confirm !== "1") {
+      el.dataset.confirm = "1"; el.textContent = `Yakin hapus "${title}"?`; el.classList.add("btn-danger-confirm");
+      setTimeout(() => { if (el.isConnected) { el.dataset.confirm = ""; el.textContent = "Hapus dokumen ini"; el.classList.remove("btn-danger-confirm"); } }, 5000);
+      return;
+    }
+    api(`/api/prds/${encodeURIComponent(file)}`, { method: "DELETE" })
+      .then((r) => { if (S.mulaiPrd === file) S.mulaiPrd = null; toast(r.note ? `${file} dihapus. ${r.note}` : `${file} dihapus dari daftar dokumen`); viewMulai(); refreshNav(); })
+      .catch((e) => toast(e.message, true));
+  }
   else if (a === "start") startRun();
   else if (a === "notes-start") notesStart();
   else if (a === "notes-save") notesSave(el.dataset.file, false);
@@ -1529,8 +2208,39 @@ app.addEventListener("click", (ev) => {
   else if (a === "compare") renderCompare();
   else if (a === "delete-run") deleteRun(el.dataset.run);
   else if (a === "save-config") saveConfig();
+  else if (a === "src-logout") sourceLogout();
+  else if (a === "md-add-prd") mdAddPrd();
+  else if (a === "cmp-start") cmpStart();
+  else if (a === "cmp-reset") { api("/api/compare/reset", { method: "POST" }).then(() => { S.cmpView = null; viewBanding(); }).catch((e) => toast(e.message, true)); }
+  else if (a === "cmp-file-clear") { const s = cmpState()[el.dataset.side]; s.file = null; s.token = null; viewBanding(); }
+  else if (a === "cmp-tab") { S.cmpTab = el.dataset.tab; S.cmpLimit = 100; cmpRerenderTable(); }
+  else if (a === "cmp-more") { S.cmpLimit = (S.cmpLimit || 100) + 100; cmpRerenderTable(); }
+  else if (a === "cmp-del") {
+    if (el.dataset.confirm !== "1") { el.dataset.confirm = "1"; el.textContent = "Yakin hapus?"; el.classList.add("btn-danger-confirm"); setTimeout(() => { if (el.isConnected) { el.dataset.confirm = ""; el.textContent = "Hapus"; el.classList.remove("btn-danger-confirm"); } }, 4000); return; }
+    api(`/api/compares/${encodeURIComponent(el.dataset.cmp)}`, { method: "DELETE" }).then(() => { toast("Hasil perbandingan dihapus"); viewBanding(); }).catch((e) => toast(e.message, true));
+  }
+  else if (a === "md-view") mdRun(el.dataset.md, "view", el);
+  else if (a === "md-download") mdRun(el.dataset.md, "download", el);
+  else if (a === "md-all") mdAll(el);
+  else if (a === "md-del") { const M = mdState(); M.files = M.files.filter((f) => f.key !== Number(el.dataset.md)); viewMdpdf(); }
+  else if (a === "md-clear") { mdState().files = []; viewMdpdf(); }
+  else if (a === "notes-md" || a === "notes-pdf") {
+    const ta = document.getElementById("nr-md"), content = ta ? ta.value : "";
+    const err = V.md(el.dataset.file, new Blob([content]).size, content);
+    if (err) { report([[ta, err]]); return; }
+    if (a === "notes-md") {
+      const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
+      const link = document.createElement("a"); link.href = url; link.download = el.dataset.file; document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      toast(`${el.dataset.file} diunduh`);
+    } else { S.mdQueue = { name: el.dataset.file, content }; location.hash = "#mdpdf"; }
+  }
   else if (a === "reset-config") route();
   else if (a === "reload") route();
+});
+
+app.addEventListener("submit", (ev) => {
+  if (ev.target.id === "src-form") { ev.preventDefault(); sourceLogin(ev.target); }
 });
 
 app.addEventListener("keydown", (ev) => {
@@ -1542,6 +2252,13 @@ app.addEventListener("change", (ev) => {
   const t = ev.target;
   if (t.id === "prd-file") uploadPrd(t.files[0]);
   else if (t.dataset.dimg) { designAddImages(t.dataset.dimg, [...t.files]); t.value = ""; }
+  else if (t.name === "src") sourcePick(t.value);
+  else if (t.dataset.cfile) { const f = t.files[0]; t.value = ""; if (f) cmpUpload(t.dataset.cfile, f); }
+  else if (t.name === "cmp-src-a" || t.name === "cmp-src-b") { cmpState()[t.name.slice(-1)].kind = t.value; viewBanding(); }
+  else if (t.name === "cmp-mode") cmpState().mode = t.value;
+  else if (t.dataset.cfield === "id") { cmpState()[t.dataset.side].id = t.value; clearErr(t); }
+  else if (t.id === "md-input") { const fs = [...t.files]; t.value = ""; mdAddFiles(fs); }
+  else if (t.id === "md-prd") { S.mdPick = t.value; clearErr(t); }
   else if (t.id === "prd-select") {
     S.mulaiPrd = t.value;
     const e = document.getElementById("estimate"); if (e && S.estimate) e.textContent = S.estimate(t.value);
@@ -1557,6 +2274,15 @@ app.addEventListener("change", (ev) => {
 
 let searchTimer = null;
 document.addEventListener("input", (ev) => { if (ev.target.getAttribute && ev.target.getAttribute("aria-invalid")) clearErr(ev.target); });
+app.addEventListener("input", (ev) => {
+  const t = ev.target;
+  if (t.dataset.cfield === "label") cmpState()[t.dataset.side].label = t.value;
+  else if (t.dataset.cfield === "name") cmpState().name = t.value;
+  else if (t.id === "cmp-q") {
+    clearTimeout(S.cmpQTimer);
+    S.cmpQTimer = setTimeout(() => { S.cmpQ = t.value; S.cmpLimit = 100; cmpRerenderTable(); const q = document.getElementById("cmp-q"); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }, 250);
+  }
+});
 document.addEventListener("change", (ev) => {
   const t = ev.target;
   if (t.getAttribute && t.getAttribute("aria-invalid")) clearErr(t);
@@ -1583,14 +2309,16 @@ app.addEventListener("input", (ev) => {
   }, 250);
 });
 
-app.addEventListener("dragover", (ev) => { const z = ev.target.closest && ev.target.closest("[data-drop]"); if (z) { ev.preventDefault(); z.classList.add("drag"); } });
-app.addEventListener("dragleave", (ev) => { const z = ev.target.closest && ev.target.closest("[data-drop]"); if (z) z.classList.remove("drag"); });
+app.addEventListener("dragover", (ev) => { const z = ev.target.closest && ev.target.closest("[data-drop], [data-mdrop], [data-cdrop]"); if (z) { ev.preventDefault(); z.classList.add("drag"); } });
+app.addEventListener("dragleave", (ev) => { const z = ev.target.closest && ev.target.closest("[data-drop], [data-mdrop], [data-cdrop]"); if (z) z.classList.remove("drag"); });
 app.addEventListener("drop", (ev) => {
-  const z = ev.target.closest && ev.target.closest("[data-drop]");
+  const z = ev.target.closest && ev.target.closest("[data-drop], [data-mdrop], [data-cdrop]");
   if (!z) return;
   ev.preventDefault();
   z.classList.remove("drag");
-  designAddImages(z.dataset.drop, [...(ev.dataTransfer.files || [])]);
+  if (z.hasAttribute("data-mdrop")) mdAddFiles([...(ev.dataTransfer.files || [])]);
+  else if (z.dataset.cdrop) { const f = (ev.dataTransfer.files || [])[0]; if (f) cmpUpload(z.dataset.cdrop, f); }
+  else designAddImages(z.dataset.drop, [...(ev.dataTransfer.files || [])]);
 });
 
 window.addEventListener("hashchange", () => { app.focus({ preventScroll: true }); window.scrollTo(0, 0); route(); });
@@ -1627,6 +2355,12 @@ route();
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) done(); else setTimeout(done, 340);
   };
   btn.addEventListener("click", enter);
+  api("/api/about").then((ab) => {
+    const n = document.getElementById("splash-note"), s = ab.source || {};
+    if (n) n.textContent = `Versi ${ab.version}. ` + (s.mode === "server"
+      ? "Dokumen tersimpan di laptop ini; AI memakai Server AI bersama lewat Tailscale."
+      : "Berjalan di laptop ini. Data tidak dikirim ke internet.");
+  }).catch(() => {});
   el.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === "Escape") { ev.preventDefault(); enter(); } });
   btn.focus();
 })();
