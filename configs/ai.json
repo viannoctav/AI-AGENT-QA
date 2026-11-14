@@ -41,7 +41,7 @@
     "judge_enabled": true,
     "num_predict": 3000,
     "temperature": 0.2,
-    "max_obligations": 3000,
+    "max_obligations": 500,
     "max_attempts": 3,
     "judge_batch": 5,
     "dedup": true,

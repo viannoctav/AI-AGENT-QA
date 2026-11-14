@@ -22,10 +22,16 @@ def _load_reference_testcases():
         glob.glob("knowledge/company_testcases/*.xlsx")
     )
 
+    sources = [f for f in ref_files if os.path.exists(f)]
+    try:  # file referensi yang dikunci dengan password dibuka di memori (lihat tools/vault.py)
+        import io
+        from tools import vault
+        sources += [io.BytesIO(data) for _, data in vault.read_locked()]
+    except Exception:
+        pass
+
     loaded = []
-    for f in ref_files:
-        if not os.path.exists(f):
-            continue
+    for f in sources:
         try:
             xls = pd.ExcelFile(f)
             df = pd.read_excel(xls, xls.sheet_names[0])

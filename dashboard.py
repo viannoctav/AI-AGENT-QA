@@ -161,6 +161,7 @@ def preflight():
     return {
         "ollama": models is not None,
         "source": source,
+        "reference": vault_info(),
         "models": [{"role": r, "name": n, "ok": n in have} for r, n in need.items()],
         "missing": sorted({n for n in need.values() if n not in have}),
         "prd_count": len(prds),
@@ -1222,17 +1223,109 @@ def delete_compare(cid):
 
 
 # ----------------------------------------------------------------------------- MD Konversi ke PDF
+MDPDF_DIR = ROOT / "outputs" / "md_pdf"
+
+
 def md_to_pdf(body):
-    """Markdown -> PDF saat itu juga (tanpa AI, tidak disimpan). Dikembalikan langsung untuk diunduh."""
+    """Markdown -> PDF saat itu juga (tanpa AI). PDF dikembalikan untuk diunduh dan dicatat di Riwayat."""
+    import hashlib
     name, content = str(body.get("name") or ""), body.get("content")
     err = FR.md_file_error(name, content)
     if err:
         raise ApiError(400, err, "md-files")
-    from tools.md_pdf import markdown_to_pdf, pdf_name
+    from tools.md_pdf import first_heading, markdown_to_pdf, pdf_name
+    t0 = time.time()
     try:
-        return markdown_to_pdf(content), pdf_name(Path(name).name)
+        data, out_name = markdown_to_pdf(content), pdf_name(Path(name).name)
     except Exception as e:
         raise ApiError(500, f"{name}: gagal dijadikan PDF ({e}).")
+    try:  # file yang sama dikonversi lagi (mis. Lihat lalu Unduh) tidak dicatat dua kali
+        rid = hashlib.sha1((Path(name).name + "\0" + content).encode("utf-8")).hexdigest()[:16]
+        d = MDPDF_DIR / rid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "hasil.pdf").write_bytes(data)
+        write_json(d / "meta.json", {"kind": "mdpdf", "id": rid, "source": Path(name).name, "pdf_file": out_name,
+                                     "title": first_heading(content) or "", "time": time.time(), "bytes": len(data),
+                                     "pages": data.count(b"/Type /Page ") , "seconds": round(time.time() - t0, 1)})
+    except Exception:
+        traceback.print_exc()  # pencatatan gagal tidak boleh menggagalkan unduhan
+    return data, out_name
+
+
+def list_mdpdfs():
+    out = []
+    if MDPDF_DIR.is_dir():
+        for d in MDPDF_DIR.iterdir():
+            meta = read_json(d / "meta.json") if d.is_dir() else None
+            if meta and (d / "hasil.pdf").is_file():
+                out.append(meta)
+    return sorted(out, key=lambda m: m.get("time") or 0, reverse=True)
+
+
+def _mdpdf_dir(rid):
+    d = MDPDF_DIR / Path(str(rid or "")).name
+    if not rid or not (d / "meta.json").is_file():
+        raise ApiError(404, "Hasil PDF tidak ditemukan")
+    return d
+
+
+def delete_mdpdf(rid):
+    shutil.rmtree(_mdpdf_dir(rid))
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------- pembaruan TƎRᗩ dari GitHub
+def update_info(force=False):
+    from tools import updater
+    return updater.check(force=force)
+
+
+def update_apply():
+    from tools import updater
+    if _busy():
+        raise ApiError(409, "Masih ada proses yang berjalan. Perbarui TƎRᗩ setelah proses itu selesai.")
+    try:
+        return updater.apply()
+    except updater.UpdateError as e:
+        raise ApiError(409, str(e))
+
+
+# ----------------------------------------------------------------------------- kunci file referensi perusahaan
+def vault_info():
+    from tools import vault
+    return vault.status()
+
+
+def vault_action(action, body):
+    from tools import vault
+    if ACTIVE["id"]:
+        raise ApiError(409, "Tunggu sampai pembuatan test case selesai.")
+    pw = str(body.get("password") or "")
+    if action == "forget":
+        vault.forget()
+        return vault.status()
+    if action == "lock" and not vault.status()["has_vault"]:  # password baru: wajib kuat dan diulang
+        err = FR.password_error(pw)
+        if err:
+            raise ApiError(400, err, "vl-pass")
+        if pw != str(body.get("password2") or ""):
+            raise ApiError(400, "Ulangi password belum sama.", "vl-pass2")
+    elif not pw:
+        raise ApiError(400, "Password wajib diisi.", "vl-pass")
+    elif len(pw) > FR.PASSWORD_MAX:
+        raise ApiError(400, f"Password maksimal {FR.PASSWORD_MAX} karakter.", "vl-pass")
+    try:
+        if action == "lock":
+            vault.lock(pw)
+        elif action == "unlock":
+            vault.unlock(pw)
+        elif action == "restore":
+            vault.restore(pw)
+        else:
+            raise ApiError(404, "Aksi tidak dikenal")
+    except vault.VaultError as e:
+        raise ApiError(400, str(e), "vl-pass")
+    return vault.status()
 
 
 # ----------------------------------------------------------------------------- sumber AI
@@ -1320,6 +1413,12 @@ route("GET", "/api/compare/sources")(lambda h, q: compare_sources())
 route("GET", "/api/compares")(lambda h, q: list_compares())
 route("GET", "/api/compares/(?P<cid>[^/]+)")(lambda h, q, cid: read_compare(unquote(cid)))
 route("DELETE", "/api/compares/(?P<cid>[^/]+)")(lambda h, q, cid: delete_compare(unquote(cid)))
+route("GET", "/api/mdpdfs")(lambda h, q: list_mdpdfs())
+route("DELETE", "/api/mdpdfs/(?P<rid>[^/]+)")(lambda h, q, rid: delete_mdpdf(unquote(rid)))
+route("GET", "/api/update")(lambda h, q: update_info(force=(q.get("cek") or [""])[0] == "1"))
+route("POST", "/api/update/apply")(lambda h, q: update_apply())
+route("GET", "/api/vault")(lambda h, q: vault_info())
+route("POST", "/api/vault/(?P<action>lock|unlock|restore|forget)")(lambda h, q, action: vault_action(action, h.json_body()))
 route("GET", "/api/about")(lambda h, q: {"version": VER.current(), "changelog": VER.changelog(), "source": ai_source.status()})
 route("GET", "/api/ai-source")(lambda h, q: source_info())
 route("POST", "/api/ai-source/login")(lambda h, q: source_login(h.json_body()))
@@ -1405,6 +1504,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not f.is_file():
                     raise ApiError(404, "File Excel tidak ditemukan")
                 return self.send_file(f, f.name)
+            m = re.fullmatch(r"/api/mdpdfs/([^/]+)/pdf", path)
+            if method == "GET" and m:
+                d = _mdpdf_dir(unquote(m.group(1)))
+                meta = read_json(d / "meta.json") or {}
+                return self.send_file(d / "hasil.pdf", Path(meta.get("pdf_file") or "hasil.pdf").name)
             if method == "POST" and path == "/api/md-pdf":
                 return self.send_pdf(*md_to_pdf(self.json_body()))
             m = re.fullmatch(r"/api/conversions/([^/]+)/(review|prd)", path)

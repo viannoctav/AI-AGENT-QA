@@ -103,6 +103,12 @@ Menu samping: klik **Konversi Dokumen** atau **Generator Test Case PRD** untuk m
 5. Klik **Susun PRD**. Perkiraan waktunya tampil di samping tombol (kira-kira 2–3 menit per layar di laptop tanpa GPU).
 6. Setelah selesai, sama seperti Catatan ke PRD: baca hal yang perlu dicek, unduh catatan review (PDF), edit PRD bila perlu, unduh PRD (.md) atau jadikan PDF bila perlu, lalu **Buat test case dari PRD ini**.
 
+PRD dari desain disusun **per alur bisnis**, bukan per elemen:
+- Bingkai sampul di papan alur (bingkai yang hanya berisi judul dan tanggal, misalnya `Users - Create`) menjadi nama alur. Layar sesudahnya menjadi langkah alur itu.
+- Tiap alur ditulis sebagai urutan langkah (layar, form, notifikasi), lalu isi form, aturan isian (misalnya "Password must contain at least 8 characters"), aksi yang tersedia, dan notifikasi yang muncul setelah aksi.
+- Layar yang sama (misalnya halaman daftar yang muncul di awal setiap alur) hanya dijelaskan sekali.
+- Supaya alurnya terbaca rapi, susun papan alur di Figma per skenario dan beri bingkai sampul di awal setiap skenario.
+
 Tips gambar:
 - Export dari Figma: pilih frame, di panel kanan bagian **Export** pilih **PNG** ukuran **2x**, lalu klik Export.
 - Bagian yang diburamkan di belakang modal atau panel otomatis diabaikan.
@@ -114,7 +120,7 @@ Tips gambar:
 2. Tambahkan file: klik **Pilih file .md** (boleh beberapa sekaligus) atau seret file ke kotaknya. Bisa juga memilih PRD yang sudah ada di TƎRᗩ, lalu **Tambahkan ke daftar**.
 3. Untuk setiap file: **Lihat PDF** (terbuka di tab baru) atau **Unduh PDF**. Kalau banyak, klik **Unduh semua PDF**; bila browser bertanya, izinkan unduhan beberapa file.
 
-PDF berukuran A4, lengkap dengan judul, daftar, tabel, kutipan, blok kode, dan nomor halaman. Fitur ini tidak memakai AI, jadi tetap bisa dipakai saat proses lain berjalan. File .md dan PDF tidak disimpan di TƎRᗩ, langsung diunduh ke folder Downloads. Batas ukuran 2 MB per file.
+PDF berukuran A4, lengkap dengan judul, daftar, tabel, kutipan, blok kode, dan nomor halaman. Fitur ini tidak memakai AI, jadi tetap bisa dipakai saat proses lain berjalan. PDF langsung diunduh ke folder Downloads dan tercatat di menu Riwayat, jadi bisa diunduh lagi. Batas ukuran 2 MB per file.
 
 ### Membuat test case dari PRD
 
@@ -127,11 +133,11 @@ PDF berukuran A4, lengkap dengan judul, daftar, tabel, kutipan, blok kode, dan n
    - **Perlu dicek**: test case yang ditandai AI untuk dicek manual.
    - **Cakupan**: memastikan semua bagian PRD sudah ada test case-nya.
 
-Semua proses tercatat di menu **Riwayat**.
+Semua proses dari setiap menu tercatat di menu **Riwayat** beserta hasilnya: pembuatan test case, konversi catatan, konversi desain, MD ke PDF (PDF-nya bisa diunduh lagi), dan perbandingan test case.
 
 ### Bandingkan test case
 
-1. Menu **Generator Test Case PRD**, lalu **Bandingkan test case**.
+1. Menu **Bandingkan Test Case** (menu sendiri di sisi kiri).
 2. Untuk **Test case A** dan **Test case B**: beri nama kumpulan (mis. `Dari desain` dan `Dari PRD`), lalu pilih sumbernya:
    - **Dari Riwayat**: hasil Generator Test Case PRD yang sudah selesai.
    - **Unggah file**: Excel (.xlsx) atau JSON, maks. 20 MB, termasuk test case buatan manual. TƎRᗩ mencari sendiri kolom judul test case, Test Data, Expected Result, dan lainnya; kolom yang dikenali ditampilkan setelah unggah.
@@ -145,6 +151,7 @@ Cara kerjanya bertingkat supaya cepat: kode memutuskan yang sudah jelas (isi sam
 ### Pengaturan
 
 - **Sumber AI**: pilih **AI di laptop ini** atau **Server AI bersama** (isi alamat server, nama pengguna, dan password dari pemilik server, lalu **Masuk**). Bagian ini tidak bisa diganti selama ada proses yang berjalan.
+- **Referensi test case perusahaan**: mengunci file contoh test case perusahaan dengan password (lihat bagian 9).
 - **AI yang dipakai** dan **Cara kerja**: model AI dan pengaturan proses. Berlaku untuk proses berikutnya.
 
 ---
@@ -159,7 +166,9 @@ Cara kerjanya bertingkat supaya cepat: kode memutuskan yang sudah jelas (isi sam
 | Hasil konversi desain (PRD, catatan review PDF, gambar asli, potongan layar) | `outputs\design_to_prd\` |
 | Hasil Bandingkan test case (laporan Excel dan data hasil) | `outputs\tc_compare\` |
 | Riwayat setiap proses pembuatan test case | `runs\` |
-| Contoh test case perusahaan (acuan gaya penulisan AI) | `knowledge\company_testcases\` |
+| Contoh test case perusahaan (acuan gaya penulisan AI), bisa dikunci dengan password | `knowledge\company_testcases\` |
+| Riwayat MD ke PDF (PDF yang pernah dibuat) | `outputs\md_pdf\` |
+| Cadangan file program sebelum pembaruan | `data\cadangan_update\` |
 | Pilihan Sumber AI dan token login ke Server AI bersama (rahasia, jangan dibagikan) | `configs\sumber_ai.json` |
 | Akun dan catatan pemakaian Server AI, hanya di komputer pemilik server (rahasia) | `data\server_ai\` |
 
@@ -201,6 +210,8 @@ Keamanannya:
 - Teman tidak bisa mengunduh, menghapus, atau mengganti model AI di komputermu.
 
 ### Untuk pemilik server (kamu)
+
+File Server AI (`Server_AI_dan_Admin_Akun.bat` dan folder `ai_server\`) sengaja **tidak ikut naik ke GitHub**, jadi hanya ada di komputermu. Teman yang mengunduh TƎRᗩ dari GitHub tidak menerima halaman admin maupun servernya.
 
 1. Pasang TƎRᗩ seperti biasa (pilihan **1**).
 2. Pasang Tailscale dari <https://tailscale.com/download>, lalu masuk.
@@ -256,7 +267,19 @@ Nomor versi ditulis tiga angka, misalnya **1.2.3**:
 - Di halaman admin Server AI, kolom **Versi** menunjukkan versi TƎRᗩ setiap teman (tanda **Lama** bila lebih lama dari server).
 - Untuk mewajibkan update, isi **Versi TƎRᗩ minimal untuk teman** di halaman admin, lalu klik **Simpan versi minimal**. Teman dengan versi lebih lama tidak bisa memakai AI dan diminta memperbarui TƎRᗩ. Kosongkan untuk mencabut batasnya.
 
-Cara teman memperbarui: terima folder TƎRᗩ terbaru (lihat bagian 9 untuk yang tidak perlu ikut dikirim), lalu salin dan timpa ke folder TƎRᗩ lamanya. Folder `runs\`, `outputs\`, `knowledge\prd\`, dan file `configs\sumber_ai.json` milik teman tetap aman selama tidak ikut dikirim. Setelah itu klik dua kali `Pasang_Tera.bat` sekali untuk memasang komponen baru bila ada.
+### Memperbarui TƎRᗩ tanpa mengirim ulang foldernya
+
+TƎRᗩ mengambil versi baru langsung dari GitHub. Setelah kamu menaikkan versi baru ke branch `master` (dengan `VERSION` dan `CHANGELOG.md` yang sudah diubah), teman cukup:
+
+- membuka TƎRᗩ: bila ada versi baru, muncul tanda **Ada versi baru** di pojok kiri bawah. Klik, lalu **Perbarui sekarang**, lalu tutup dan buka lagi TƎRᗩ; atau
+- menutup TƎRᗩ, lalu klik dua kali **`Perbarui_Tera.bat`**.
+
+Yang diperbarui hanya file program. Hasil kerja (`runs\`, `outputs\`), dokumen PRD (`knowledge\prd\`), akun dan token, serta pilihan di Pengaturan tidak diubah. File program lama dicadangkan dulu di `data\cadangan_update\`.
+
+Catatan:
+- Fitur ini baru ada mulai versi 1.3.0. Teman yang masih memakai versi 1.2.0 ke bawah perlu **sekali** menerima folder terbaru (atau mengunduh ZIP dari GitHub dan menimpa foldernya). Sesudah itu selalu bisa memperbarui sendiri.
+- Folder milikmu sendiri terhubung ke Git, jadi tidak ditimpa otomatis. Kamu tetap memakai Git seperti biasa.
+- Alamat repo dan branch sumber pembaruan ada di `configs\update.json`.
 
 ---
 
@@ -273,7 +296,23 @@ Saat menyalin atau meng-zip folder TƎRᗩ untuk teman, **jangan ikut sertakan**
 
 Teman cukup menerima folder TƎRᗩ, lalu klik dua kali `Pasang_Tera.bat`.
 
-Cek juga isi `knowledge\prd\` dan `knowledge\company_testcases\`. Kalau berisi dokumen internal kantor, pastikan memang boleh dibagikan sebelum ikut disalin.
+Cek juga isi `knowledge\prd\`. Kalau berisi dokumen internal kantor, pastikan memang boleh dibagikan sebelum ikut disalin.
+
+### Mengunci file referensi test case perusahaan
+
+File Excel di `knowledge\company_testcases\` adalah contoh test case perusahaan yang gaya penulisannya ditiru AI. Supaya tidak terbaca orang lain:
+
+1. Simpan dulu salinan file aslinya di tempat aman di luar folder TƎRᗩ.
+2. Buka **Pengaturan** > **Referensi test case perusahaan** > **Kunci dengan password**, isi password dua kali, lalu **Kunci file**.
+3. File `.xlsx` berubah menjadi `.xlsx.terakunci`. Hanya versi terkunci ini (dan `kunci.json`, yang bukan rahasia) yang ikut naik ke GitHub; file `.xlsx` biasa di folder itu tidak akan ikut naik lagi.
+
+Di laptopmu kuncinya langsung tersimpan, jadi TƎRᗩ tetap memakai referensi itu. Di laptop teman, referensi baru dipakai setelah teman mengisi password yang sama di Pengaturan (**Isi password**). Tanpa password, test case tetap bisa dibuat, hanya tanpa contoh gaya penulisan perusahaan.
+
+Yang perlu diketahui:
+- Kalau password lupa, file terkunci tidak bisa dibuka oleh siapa pun. Karena itu simpan salinan aslinya.
+- Siapa pun yang kamu beri password bisa memakai (dan pada akhirnya membaca) isinya. Beri hanya ke orang yang memang boleh.
+- File asli yang **sudah pernah** naik ke GitHub masih ada di riwayat Git lama. Mengunci tidak menghapus riwayat itu.
+- **Buka kunci permanen** mengembalikan file menjadi `.xlsx` biasa.
 
 ---
 
@@ -283,6 +322,7 @@ Cek juga isi `knowledge\prd\` dan `knowledge\company_testcases\`. Kalau berisi d
 |---|---|
 | `Pasang_Tera.bat` | Pemasang sekali klik (Python, Ollama, komponen, model AI, bahasa OCR, ikon Desktop) |
 | `Jalankan_Tera.bat` | Membuka TƎRᗩ setiap kali mau dipakai |
+| `Perbarui_Tera.bat` | Mengambil versi TƎRᗩ terbaru dari GitHub (bisa juga dari tombol di dalam TƎRᗩ) |
 | `VERSION`, `CHANGELOG.md` | Nomor versi TƎRᗩ dan catatan perubahan setiap versi |
 | `Server_AI_dan_Admin_Akun.bat`, `ai_server\` | Menyalakan Server AI bersama dan membuka halaman admin untuk membuat akun teman (hanya di komputer pemilik server) |
 | `setup\` | Script pemasang yang dipanggil `Pasang_Tera.bat` |

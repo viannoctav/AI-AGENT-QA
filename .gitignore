@@ -47,3 +47,16 @@ data/server_ai/
 # --- Token login ke Server AI bersama di laptop ini (rahasia) ---
 configs/sumber_ai.json
 configs/sumber_ai.tmp
+
+# --- Server AI bersama dan halaman admin akun: hanya untuk pemilik server, tidak dibagikan lewat GitHub ---
+Server_AI_dan_Admin_Akun.bat
+Jalankan_Server_AI.bat
+ai_server/
+# --- Referensi test case perusahaan: yang naik ke GitHub hanya versi terkunci (*.terakunci + kunci.json) ---
+knowledge/company_testcases/*.xlsx
+configs/kunci_referensi.json
+configs/kunci_referensi.tmp
+# --- Riwayat MD ke PDF dan perbandingan test case (hasil kerja), cadangan sebelum pembaruan ---
+outputs/md_pdf/
+outputs/tc_compare/
+data/cadangan_update/

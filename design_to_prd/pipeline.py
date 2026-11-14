@@ -151,20 +151,30 @@ def _run(cards, extra, name, llm, ocr_fn, clean_lines, cb, out_dir, t0, P):
         ocr = ocr_fn([s["path"] for s in todo], out_dir / "kerja")
     # 3) AI memberi jenis (per layar)
     summaries, failed, empty, by_id = [], [], [], {}
+    lab_cache: Dict[Any, Dict[str, Any]] = {}
+    reused = 0
     P["phase"] = "kenali"
     for k, s in enumerate(todo, 1):
         ts = time.time()
         lines = clean_lines(ocr.get(s["path"], []), s["size"][1])
         s["ocr"] = lines
         where = f"gambar {s['image']}" + (f" layar {s['order']}" if s["of"] > 1 else "")
+        sig = tuple(l["text"] for l in lines)
         if not lines:
             empty.append(where)
             lab = {"kind": "", "title_no": 0, "labels": {}, "ok": True}
+        elif scr.is_cover(lines):  # bingkai sampul alur: cukup judulnya, tidak perlu AI
+            lab = {"kind": "", "title_no": 0, "labels": {}, "ok": True}
+        elif sig in lab_cache:  # layar dengan teks yang sama persis: jenisnya dipakai ulang, tidak ditanyakan lagi ke AI
+            lab = lab_cache[sig]
+            reused += 1
         else:
             _say(cb, f"Mengenali elemen layar {k}/{len(todo)} ({where}, {len(lines)} teks) ...")
             lab = lb.label_screen(llm, s["path"], lines)
             if not lab["ok"]:
                 failed.append(where)
+            else:
+                lab_cache[sig] = lab
             P["screen_secs"].append(round(time.time() - ts, 1))
         by_id[s["id"]] = (s, lab)
         P["screens_done"] = k
@@ -174,7 +184,9 @@ def _run(cards, extra, name, llm, ocr_fn, clean_lines, cb, out_dir, t0, P):
             continue
         base, lab = src
         lines = base.get("ocr", [])
+        lab = dict(lab)
         sm = scr.summarize({**s}, scr.build_elements(lines, lab), lab, s["card"])
+        sm["cover"] = scr.is_cover(lines)
         sm["dup"] = bool(s["duplicate_of"])
         summaries.append(sm)
         s["labels"] = {str(k): v for k, v in lab["labels"].items()}
@@ -185,19 +197,12 @@ def _run(cards, extra, name, llm, ocr_fn, clean_lines, cb, out_dir, t0, P):
     nav: List[Dict[str, Any]] = []
     nav_seen: set = set()
     sig_seen: set = set()
-    for c in cards:
+    described: set = set()
+    for c in cards:  # aturan disusun per alur bisnis; layar yang sudah dijelaskan tidak diulang
         sc = [x for x in summaries if x["card"] == c["nama"]]
         rules: List[Dict[str, Any]] = []
-        mine = set()
-        for x in sc:  # layar yang isinya sama persis dengan layar di halaman sebelumnya tidak diulang
-            sig = (guards.norm(scr.screen_name(x)), tuple(sorted(guards.norm(e["teks"]) for e in x["elements"])))
-            x["dup"] = x.get("dup") or sig in sig_seen
-            mine.add(sig)
-        sig_seen |= mine
-        for g in scr.merge([x for x in sc if not x.get("dup")]):
-            for r in scr.rules_for(g, nav_seen):
-                (nav if r["fitur"] == "Navigasi" else rules).append(r)
-        rules += scr.flow_rules(sc, c["nama"])
+        for r in scr.card_rules(c["nama"], sc, nav_seen, described):
+            (nav if r["fitur"] == "Navigasi" else rules).append(r)
         ui[c["nama"]] = rules
 
     # 5) penjelasan QA (per halaman + deskripsi tambahan): penjaga kutipan yang sama dengan Catatan Konversi ke PRD

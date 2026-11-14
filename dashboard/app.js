@@ -89,6 +89,16 @@ const V = {
     if (V.alnum(text) < 3) return `${name}: tidak berisi teks yang bisa dijadikan PDF.`;
     return "";
   },
+  password(value) {
+    const v = String(value ?? "");
+    if (!v) return "Password wajib diisi.";
+    if (v.length < 8) return "Password minimal 8 karakter.";
+    if (v.length > 128) return "Password maksimal 128 karakter.";
+    if (v !== v.trim()) return "Password tidak boleh diawali atau diakhiri spasi.";
+    if (!/[A-Za-z]/.test(v) || !/\d/.test(v)) return "Password harus berisi huruf dan angka.";
+    if (new Set(v.toLowerCase()).size < 4) return "Password terlalu mudah ditebak.";
+    return "";
+  },
   username(value) {
     const v = String(value ?? "");
     if (!v.trim()) return "Nama pengguna wajib diisi.";
@@ -419,9 +429,52 @@ function pullHint(pf, name) { return (pf.source || {}).mode === "server" ? `Mint
 function setNavVersion(src) {
   const a = document.getElementById("nav-version");
   if (!a || !src || !src.version) return;
-  const fresh = src.update_available || src.too_old;
+  const gh = S.update && S.update.available && !S.update.dev;
+  const fresh = src.update_available || src.too_old || gh;
   a.innerHTML = `<span class="lbl">TƎRᗩ versi</span>${esc(src.version)}${fresh ? `<span class="nav-ver-new">${src.too_old ? "Perlu update" : "Ada versi baru"}</span>` : ""}`;
-  a.title = fresh ? `Server AI bersama memakai versi ${src.server_version}` : "Lihat apa yang baru";
+  a.title = gh ? `Versi ${S.update.latest} tersedia. Klik untuk memperbarui` : fresh ? `Server AI bersama memakai versi ${src.server_version}` : "Lihat apa yang baru";
+  S.navSrc = src;
+}
+
+/* ---------- pembaruan dari GitHub */
+async function checkUpdate(force) {
+  try { S.update = await api(`/api/update${force ? "?cek=1" : ""}`); } catch (e) { S.update = { error: e.message }; }
+  if (S.navSrc) setNavVersion(S.navSrc);
+  return S.update;
+}
+
+function updateCardHtml(u) {
+  if (!u) return "";
+  let body;
+  if (u.dev) body = `<p class="small">Folder ini salinan pengembang (terhubung ke Git), jadi tidak ditimpa otomatis. Versi di GitHub: <b class="num">${esc(u.latest || "-")}</b>. Untuk mengambil perubahan, pakai <span class="mono">git pull</span>.</p>`;
+  else if (u.error) body = `<p class="small" style="color:var(--warn)">${esc(u.error)}</p>`;
+  else if (u.available) body = `<p class="small"><strong>Versi ${esc(u.latest)} tersedia</strong> (laptop ini versi ${esc(u.current)}). Yang diperbarui hanya file program. Hasil kerja, dokumen PRD, akun, dan pengaturanmu tidak diubah, dan file program lama dicadangkan dulu.</p>
+      ${(parseChangelog(u.changelog).filter((r) => verOlder(u.current, r.version)).slice(0, 3)).map((r) => `<div><h3 class="rel-group">Baru di versi ${esc(r.version)}</h3><ul class="rel-list">${r.groups.flatMap((g) => g.items).slice(0, 8).map((i) => `<li>${inlineMd(i)}</li>`).join("")}</ul></div>`).join("")}`;
+  else body = `<p class="small">${icon("ok")} TƎRᗩ di laptop ini sudah versi terbaru (${esc(u.current)}).</p>`;
+  return `<section class="card" aria-labelledby="upd-h"><div class="card-head"><h2 id="upd-h">Pembaruan</h2>
+      <div class="actions">${u.available && !u.dev ? `<button type="button" class="btn btn-primary" data-action="upd-apply">Perbarui sekarang</button>` : ""}
+        <button type="button" class="btn btn-small" data-action="upd-check">Periksa pembaruan</button></div></div>
+    ${body}
+    <p class="tiny muted">Pembaruan diambil dari GitHub${u.repo ? ` (${esc(u.repo)})` : ""}, jadi butuh internet. Bisa juga lewat file <span class="mono">Perbarui_Tera.bat</span> saat TƎRᗩ ditutup.</p></section>`;
+}
+function verOlder(a, b) {
+  const p = (v) => (/^\d+\.\d+\.\d+$/.test(v || "") ? v.split(".").map(Number) : null), x = p(a), y = p(b);
+  if (!y) return false; if (!x) return true;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
+  return false;
+}
+
+async function updateApply(btn) {
+  btn.disabled = true; btn.innerHTML = `<span class="spinner" aria-hidden="true"></span>Mengunduh dan memasang...`;
+  try {
+    const r = await api("/api/update/apply", { method: "POST", body: {} });
+    S.update = null;
+    if (!r.updated) { toast(r.message); return viewVersi(true); }
+    app.innerHTML = `<header class="page-head"><div><h1>TƎRᗩ diperbarui ke versi ${esc(r.version)}</h1></div></header>
+      <section class="card"><p><strong>Tutup TƎRᗩ, lalu buka lagi</strong> lewat ikon TERA di Desktop supaya versi baru dipakai. Tutup juga jendela hitam TƎRᗩ.</p>
+        <p class="small muted">${num(r.files)} file program diperbarui${r.removed ? `, ${num(r.removed)} file lama dibuang` : ""}. Hasil kerja dan pengaturanmu tidak diubah.${r.backup ? ` File program lama dicadangkan di <span class="mono">${esc(r.backup)}</span>.` : ""}</p>
+        ${r.warning ? `<div class="banner" role="alert"><span>${esc(r.warning)}</span></div>` : ""}</section>`;
+  } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = "Perbarui sekarang"; }
 }
 
 // CHANGELOG.md -> [{version, date, groups: [{title, items}]}]
@@ -439,8 +492,8 @@ function parseChangelog(md) {
 }
 const inlineMd = (t) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
 
-async function viewVersi() {
-  const ab = await api("/api/about");
+async function viewVersi(force) {
+  const [ab, upd] = await Promise.all([api("/api/about"), checkUpdate(force === true)]);
   const src = ab.source || {};
   setNavVersion(src);
   const rel = parseChangelog(ab.changelog);
@@ -453,6 +506,7 @@ async function viewVersi() {
   <header class="page-head"><div><h1>Apa yang baru</h1>
     <p class="muted">TƎRᗩ di laptop ini versi <b class="num">${esc(ab.version)}</b>.${src.mode === "server" && src.server_version ? ` Server AI bersama versi <span class="num">${esc(src.server_version)}</span>.` : ""}</p></div></header>
   ${banner}
+  ${updateCardHtml(upd)}
   ${rel.length ? rel.map((r) => `<section class="card release" aria-labelledby="rel-${esc(r.version)}">
       <div class="card-head"><h2 id="rel-${esc(r.version)}">Versi ${esc(r.version)}${r.version === ab.version ? ` <span class="chip-now">Versi kamu</span>` : ""}</h2>
         ${r.date ? `<span class="small muted">${esc(r.date)}</span>` : ""}</div>
@@ -610,6 +664,9 @@ async function viewMulai() {
     ...(pf.ollama ? roleRows : []),
     [prds.length ? "ok" : "err", prds.length ? `${prds.length} dokumen PRD tersedia` : "Belum ada dokumen PRD", prds.length ? "" : "Tambahkan file .md dengan tombol Tambah dokumen PRD"],
   ];
+  const ref = pf.reference || {};
+  if (ref.locked && !ref.unlocked) rows.push(["warn", "Referensi test case perusahaan terkunci", "Test case tetap bisa dibuat, tetapi tanpa contoh gaya penulisan perusahaan. Isi password di Pengaturan."]);
+  else if (ref.locked || ref.plain) rows.push(["ok", "Referensi test case perusahaan dipakai", `${num((ref.locked || 0) + (ref.plain || 0))} file${ref.plain ? ` (${num(ref.plain)} belum dikunci)` : ""}`]);
   if (pf.active_run) rows.push(["warn", "Ada proses yang masih berjalan", "Tunggu sampai selesai sebelum memulai yang baru"]);
 
   const estimate = (file) => {
@@ -718,14 +775,14 @@ const FLOWS = [
       ["in", "Gambar + penjelasan", "Per halaman/fitur: gambar export Figma atau screenshot, plus penjelasan opsional dan deskripsi tambahan."],
       ["code", "Potong layar & latar buram", "Papan alur dipotong per layar. Latar buram di belakang modal/panel dibuang supaya tidak ada yang bisa ditebak. Layar kembar dibaca sekali."],
       ["code", "Baca teks (pembaca teks Windows)", "Teks di layar dibaca persis dalam hitungan detik, termasuk salah ketik. Tidak bisa mengarang karena hanya membaca huruf yang ada."],
-      ["ai", "Kenali jenis elemen", "AI melihat gambar dan hanya memberi jenis pada teks bernomor: tombol, field, label, placeholder, pesan, tabel. AI tidak bisa menambah teks baru."],
-      ["code", "Susun isi layar", "Label dipasangkan dengan isiannya, pesan bantuan dengan field-nya, isi tabel dengan kolomnya, lalu urutan layar di papan alur dicatat."],
+      ["ai", "Kenali jenis elemen", "AI melihat gambar dan hanya memberi jenis pada teks bernomor: tombol, field, label, placeholder, pesan, tabel. AI tidak bisa menambah teks baru. Layar dengan teks yang sama tidak ditanyakan dua kali, dan yang terlewat AI dilengkapi kode."],
+      ["code", "Susun alur bisnis", "Bingkai sampul di papan alur (mis. \"Users - Create\") menjadi nama alur. Tiap alur ditulis sebagai urutan langkah: layar, form dan isiannya, aturan isian, aksi, lalu notifikasi yang muncul. Layar yang sama tidak diulang."],
       ["ai", "Baca penjelasan", "Penjelasan QA diproses dengan penjaga kutipan yang sama seperti Catatan Konversi ke PRD."],
       ["out", "PRD + catatan review", "PRD siap dipakai generator test case. Hal yang perlu dikonfirmasi (mis. field abu-abu) ada di catatan review (PDF)."],
     ],
   },
   {
-    id: "banding", title: "Bandingkan test case", note: "Generator Test Case PRD",
+    id: "banding", title: "Bandingkan Test Case", note: "Menu sendiri",
     steps: [
       ["in", "Test case A dan B", "Dua kumpulan test case dari Riwayat atau file Excel/JSON, mis. hasil dari desain dan dari PRD."],
       ["code", "Rapikan & kembar persis", "Kata pembuka dibuang, kata bermakna sama disamakan (tampil = muncul = displayed). Yang isinya sama persis langsung jadi Sama."],
@@ -740,7 +797,7 @@ const FLOWS = [
     steps: [
       ["in", "File .md", "File PRD .md dari laptop (mis. unduhan Catatan atau Desain Konversi ke PRD), atau PRD yang sudah ada di TƎRᗩ."],
       ["code", "Baca format", "Judul, paragraf, daftar, tabel, kutipan, dan blok kode dikenali. Tanpa AI, jadi selesai dalam hitungan detik."],
-      ["out", "PDF A4", "PDF rapi bernomor halaman langsung diunduh. Tidak ada file yang disimpan di TƎRᗩ."],
+      ["out", "PDF A4", "PDF rapi bernomor halaman langsung diunduh dan tercatat di Riwayat, jadi bisa diunduh lagi."],
     ],
   },
   {
@@ -1536,13 +1593,29 @@ async function viewCek(runId) {
 
 /* ================================================================= RIWAYAT */
 async function viewRiwayat() {
-  const [runs, convs] = await Promise.all([api("/api/runs"), api("/api/conversions").catch(() => [])]);
+  const [runs, convs, cmps, pdfs] = await Promise.all([api("/api/runs"), api("/api/conversions").catch(() => []),
+    api("/api/compares").catch(() => []), api("/api/mdpdfs").catch(() => [])]);
   S.runsCache = runs;
   S.compare = new Set([...S.compare].filter((id) => runs.some((r) => r.id === id)));
   const rows = [
     ...runs.map((r) => ({ kind: "tc", t: r.finished || r.started || 0, r })),
     ...convs.map((c) => ({ kind: "conv", t: c.time || 0, c })),
+    ...cmps.map((c) => ({ kind: "cmp", t: c.time || 0, c })),
+    ...pdfs.map((c) => ({ kind: "pdf", t: c.time || 0, c })),
   ].sort((x, y) => y.t - x.t);
+  const cmpRow = (c) => { const st = c.stats || {}, l = c.labels || {}; return `<tr>
+    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip info">Bandingkan TC</span></td><td>${esc(c.name)}</td>
+    <td>${esc(l.a)} ${esc(pctTxt(st.a_coverage))} dan ${esc(l.b)} ${esc(pctTxt(st.b_coverage))} berpasangan, ${num(st.bertentangan)} bertentangan, ${num(st.perlu_dicek)} perlu dicek</td>
+    <td class="r">${esc(fmtDur(st.seconds))}</td><td>${statusChip("selesai")}</td>
+    <td><span class="actions"><a class="btn btn-small" href="#banding/${encodeURIComponent(c.id)}">Lihat hasil</a>
+      <a class="btn btn-small" href="/api/compares/${encodeURIComponent(c.id)}/xlsx">Excel</a>
+      <button type="button" class="btn btn-small" data-action="hist-del" data-url="/api/compares/${encodeURIComponent(c.id)}">Hapus</button></span></td></tr>`; };
+  const pdfRow = (c) => `<tr>
+    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip grey">MD ke PDF</span></td><td>${esc(c.title || c.source)}</td>
+    <td><span class="mono">${esc(c.source)}</span> menjadi PDF ${num(c.pages)} halaman (${esc(fmtSize(c.bytes || 0))})</td>
+    <td class="r">${esc(fmtDur(c.seconds))}</td><td>${statusChip("selesai")}</td>
+    <td><span class="actions"><a class="btn btn-small" href="/api/mdpdfs/${encodeURIComponent(c.id)}/pdf" download="${esc(c.pdf_file)}">Unduh PDF</a>
+      <button type="button" class="btn btn-small" data-action="hist-del" data-url="/api/mdpdfs/${encodeURIComponent(c.id)}">Hapus</button></span></td></tr>`;
   const tcRow = (r) => { const rep = r.report || {}; return `<tr>
     <td><input type="checkbox" data-action="pick-run" data-run="${esc(r.id)}" ${S.compare.has(r.id) ? "checked" : ""} aria-label="Pilih proses ${esc(fmtDate(r.finished || r.started))} untuk dibandingkan"></td>
     <td class="num nw">${esc(fmtDate(r.finished || r.started))}</td><td class="nw"><span class="chip brand">Test case PRD</span></td><td>${esc(r.prd_title)}</td>
@@ -1560,13 +1633,13 @@ async function viewRiwayat() {
       ${c.prd_exists ? `<button type="button" class="btn btn-small" data-action="conv-use" data-file="${esc(c.prd_file)}">Buat test case</button>` : ""}
       <button type="button" class="btn btn-small" data-action="conv-delete" data-conv="${esc(c.id)}">Hapus</button></span></td></tr>`;
   app.innerHTML = `
-  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini (pembuatan test case, konversi catatan, dan konversi desain), terbaru di atas.</p></div>
-    <div class="actions"><button type="button" class="btn" data-action="compare">Bandingkan 2 test case yang dipilih</button></div></header>
+  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini beserta hasilnya (pembuatan test case, konversi catatan, konversi desain, MD ke PDF, dan perbandingan test case), terbaru di atas.</p></div>
+    <div class="actions"><button type="button" class="btn" data-action="compare">Bandingkan angka 2 proses yang dipilih</button></div></header>
   <section class="card hist">
     ${rows.length ? `<div class="table-wrap"><table style="min-width:980px"><thead><tr>
       <th><span class="sr-only">Pilih</span></th><th>Waktu</th><th>Jenis</th><th>Dokumen</th><th>Ringkasan</th>
       <th class="r">Lama</th><th>Status</th><th style="width:300px"><span class="sr-only">Aksi</span></th></tr></thead><tbody>
-      ${rows.map((x) => (x.kind === "tc" ? tcRow(x.r) : convRow(x.c))).join("")}
+      ${rows.map((x) => (x.kind === "tc" ? tcRow(x.r) : x.kind === "conv" ? convRow(x.c) : x.kind === "cmp" ? cmpRow(x.c) : pdfRow(x.c))).join("")}
       </tbody></table></div>` : `<div class="empty"><p>Belum ada proses. Mulai dari konversi catatan atau buat test case dari PRD.</p>
         <div class="actions"><a class="btn" href="#catatan">Catatan Konversi ke PRD</a><a class="btn btn-primary" href="#mulai">Mulai buat test case</a></div></div>`}
   </section>
@@ -1746,7 +1819,7 @@ async function viewBanding(arg) {
   if (arg) {
     const r = await api(`/api/compares/${encodeURIComponent(arg)}`);
     if (S.cmpView !== arg) { S.cmpView = arg; S.cmpTab = "pairs"; S.cmpQ = ""; S.cmpLimit = 100; }
-    app.innerHTML = `<header class="page-head"><div><p class="tiny muted">Generator Test Case PRD</p><h1>Bandingkan test case</h1></div></header>${cmpResultHtml(r, true)}`;
+    app.innerHTML = `<header class="page-head"><div><h1>Bandingkan Test Case</h1></div></header>${cmpResultHtml(r, true)}`;
     S.cmpShown = r;
     return;
   }
@@ -1758,7 +1831,7 @@ async function viewBanding(arg) {
   S.cmpShown = res;
   const locked = running;
   app.innerHTML = `
-  <header class="page-head"><div><p class="tiny muted">Generator Test Case PRD</p><h1>Bandingkan test case</h1>
+  <header class="page-head"><div><h1>Bandingkan Test Case</h1>
     <p class="muted">Bandingkan dua kumpulan test case, mis. hasil dari desain dengan hasil dari PRD, atau versi lama dengan versi baru. Kode memutuskan yang sudah jelas, kemiripan makna mempersempit sisanya, dan AI hanya menilai pasangan yang masih ragu. Test case sumber tidak diubah.</p></div></header>
   ${d.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Perbandingan gagal.</strong> ${esc(d.error || "")}</span><button type="button" class="btn btn-small" data-action="cmp-reset">Tutup</button></div>` : ""}
   ${running ? `<div id="cmp-prog">${cmpProgressHtml(d)}</div>` : ""}
@@ -1973,7 +2046,7 @@ async function viewMdpdf() {
           <button type="button" class="btn btn-small btn-primary" data-action="md-download" data-md="${f.key}">Unduh PDF</button>
           <button type="button" class="btn btn-small" data-action="md-del" data-md="${f.key}" aria-label="Hapus ${esc(f.name)} dari daftar">Hapus</button></div></li>`).join("")}</ul>`
       : `<p class="muted">Belum ada file. Tambahkan file .md dari laptop atau pilih PRD yang sudah ada di TƎRᗩ.</p>`}
-    <p class="tiny muted">PDF dibuat saat tombol diklik dan langsung diunduh. File .md dan PDF tidak disimpan di TƎRᗩ.</p>
+    <p class="tiny muted">PDF dibuat saat tombol diklik dan langsung diunduh. PDF yang pernah dibuat tercatat di menu Riwayat dan bisa diunduh lagi.</p>
   </section>`;
 }
 
@@ -1981,7 +2054,7 @@ async function viewMdpdf() {
 const KINDS = [["decision", "Tabel keputusan"], ["edge", "Kasus tepi"], ["whitespace", "Spasi di awal/akhir"]];
 
 async function viewPengaturan() {
-  const [cfg, mi, pf] = await Promise.all([api("/api/config"), api("/api/models"), api("/api/preflight")]);
+  const [cfg, mi, pf, vault] = await Promise.all([api("/api/config"), api("/api/models"), api("/api/preflight"), api("/api/vault").catch(() => null)]);
   S.config = cfg;
   const installed = (mi.models || []).map((m) => m.name);
   const sel = (id, val, allowNone) => {
@@ -2000,6 +2073,7 @@ async function viewPengaturan() {
   ${locked ? `<div class="banner" role="status"><span>Pengaturan tidak bisa disimpan selama ada proses yang berjalan.</span><a href="#berjalan">Lihat progresnya</a></div>` : ""}
   ${mi.ollama ? "" : `<div class="banner error">${esc(aiStatus(mi)[1])}, jadi daftar model tidak bisa dibaca. ${esc(aiStatus(mi)[2])}.</div>`}
   ${sourceCard(mi.source || { mode: "lokal" }, mi.ollama, locked)}
+  ${vaultCard(vault, locked)}
   <div class="grid grid-2">
     <section class="card" aria-labelledby="m-title"><h2 id="m-title">AI yang dipakai</h2>
       <label class="field" for="c-gen">AI penulis test case${sel("c-gen", cfg.generation_model)}</label>
@@ -2059,6 +2133,57 @@ function sourceCard(src, ok, locked) {
       <label class="radio-card"><input type="radio" name="src" value="lokal" ${want !== "server" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>AI di laptop ini</b><br><span class="tiny muted">Ollama di laptop ini</span></span></label>
       <label class="radio-card"><input type="radio" name="src" value="server" ${want === "server" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Server AI bersama</b><br><span class="tiny muted">AI di komputer teman, lewat Tailscale</span></span></label>
     </div>${body}</section>`;
+}
+
+/* ---------- kunci file referensi test case perusahaan */
+function vaultCard(v, locked) {
+  if (!v) return "";
+  const mode = S.vaultMode;
+  const total = v.plain + v.locked;
+  let state, actions = "";
+  if (!total) state = `<p class="small muted">Belum ada file referensi di <span class="mono">knowledge\\company_testcases</span>. Taruh file Excel contoh test case perusahaan di folder itu bila ingin gaya penulisannya ditiru.</p>`;
+  else {
+    const rows = [];
+    if (v.plain) rows.push(["warn", `${num(v.plain)} file belum dikunci`, "File ini masih bisa dibuka siapa pun yang memegang folder TƎRᗩ, dan tidak ikut naik ke GitHub sampai dikunci."]);
+    if (v.locked) rows.push([v.unlocked ? "ok" : "warn", `${num(v.locked)} file terkunci`, v.unlocked ? "Kunci tersimpan di laptop ini, jadi file dipakai sebagai referensi saat membuat test case." : "Isi password supaya file ini dipakai sebagai referensi di laptop ini."]);
+    state = `<ul class="ready-list" style="margin:0">${rows.map(([k, t, sub]) => `<li>${icon(k)}<span><span style="font-weight:500">${esc(t)}</span><br><span class="tiny muted">${esc(sub)}</span></span></li>`).join("")}</ul>`;
+    const b = (m, label, primary) => `<button type="button" class="btn${primary ? " btn-primary" : ""}" data-action="vault-mode" data-mode="${m}" ${locked ? "disabled" : ""}>${label}</button>`;
+    actions = `<div class="actions">${v.plain ? b("lock", v.has_vault ? "Kunci file yang belum dikunci" : "Kunci dengan password", true) : ""}
+      ${v.locked && !v.unlocked ? b("unlock", "Isi password", !v.plain) : ""}
+      ${v.locked && v.unlocked ? `<button type="button" class="btn" data-action="vault-forget" ${locked ? "disabled" : ""}>Lepas kunci dari laptop ini</button>` : ""}
+      ${v.locked ? b("restore", "Buka kunci permanen") : ""}</div>`;
+  }
+  const fresh = mode === "lock" && !v.has_vault;
+  const title = { lock: fresh ? "Buat password untuk mengunci file" : "Masukkan password yang sama untuk mengunci file baru", unlock: "Masukkan password file referensi", restore: "Masukkan password untuk mengembalikan file asli (.xlsx)" }[mode];
+  const form = mode ? `<form id="vault-form" class="fields" novalidate autocomplete="off" style="border-top:1px solid var(--line-soft);padding-top:14px">
+      <p class="small" style="grid-column:1/-1;font-weight:500">${esc(title)}</p>
+      <label class="field" for="vl-pass">Password<input id="vl-pass" type="password" maxlength="128" autocomplete="${fresh ? "new-password" : "current-password"}">
+        ${fresh ? `<span class="hint">Minimal 8 karakter, berisi huruf dan angka.</span>` : ""}</label>
+      ${fresh ? `<label class="field" for="vl-pass2">Ulangi password<input id="vl-pass2" type="password" maxlength="128" autocomplete="new-password"></label>` : ""}
+      <div class="actions" style="padding-top:27px"><button type="submit" class="btn btn-primary">${{ lock: "Kunci file", unlock: "Simpan", restore: "Kembalikan file asli" }[mode]}</button>
+        <button type="button" class="btn" data-action="vault-cancel">Batal</button></div>
+      ${fresh ? `<p class="tiny" style="grid-column:1/-1;color:var(--warn)">Simpan password ini baik-baik. Kalau lupa, file referensi tidak bisa dibuka lagi oleh siapa pun. Simpan dulu salinan file aslinya di tempat aman di luar folder TƎRᗩ.</p>` : ""}
+      ${mode === "restore" ? `<p class="tiny" style="grid-column:1/-1;color:var(--warn)">File kembali menjadi .xlsx biasa dan versi terkuncinya dihapus.</p>` : ""}
+    </form>` : "";
+  return `<section class="card" aria-labelledby="vault-title"><h2 id="vault-title">Referensi test case perusahaan</h2>
+    <p class="small muted">Contoh test case perusahaan yang gaya penulisannya ditiru AI. File bisa dikunci dengan password: yang ikut ke GitHub dan ke laptop teman hanya versi terkunci, dan hanya yang tahu password yang bisa memakainya.</p>
+    ${state}${mode ? "" : actions}${form}</section>`;
+}
+
+async function vaultSubmit(form) {
+  const mode = S.vaultMode, $ = (id) => document.getElementById(id);
+  const p = $("vl-pass"), p2 = $("vl-pass2");
+  const errs = [[p, p2 ? V.password(p.value) : (p.value ? "" : "Password wajib diisi.")]];
+  if (p2) errs.push([p2, p2.value ? (p2.value === p.value ? "" : "Ulangi password belum sama.") : "Ulangi password wajib diisi."]);
+  if (!report(errs, form)) return;
+  const btn = form.querySelector("button[type=submit]"), label = btn.textContent;
+  btn.disabled = true; btn.innerHTML = `<span class="spinner" aria-hidden="true"></span>Memproses...`;
+  try {
+    await api(`/api/vault/${mode}`, { method: "POST", body: { password: p.value, password2: p2 ? p2.value : "" } });
+    S.vaultMode = null;
+    toast({ lock: "File referensi dikunci", unlock: "Password benar. File referensi dipakai di laptop ini.", restore: "File asli dikembalikan" }[mode]);
+    await viewPengaturan();
+  } catch (e) { btn.disabled = false; btn.textContent = label; p.value = ""; serverErr(e); }
 }
 
 async function sourcePick(mode) {
@@ -2137,7 +2262,7 @@ async function route() {
   if (v !== "berjalan") closeStream();
   if (v !== "catatan") stopNotesTimer();
   if (v !== "desain") stopDesignTimer();
-  if (v !== "pengaturan") S.sourcePick = null;
+  if (v !== "pengaturan") { S.sourcePick = null; S.vaultMode = null; }
   if (v !== "banding") stopCompareTimer();
   try {
     if (v === "beranda") await viewBeranda();
@@ -2151,7 +2276,7 @@ async function route() {
     else if (v === "cek") await viewCek(arg && decodeURIComponent(arg));
     else if (v === "riwayat") await viewRiwayat();
     else if (v === "pengaturan") await viewPengaturan();
-    else if (v === "versi") await viewVersi();
+    else if (v === "versi") await viewVersi(false);
     else if (v === "mdpdf") await viewMdpdf();
     else if (v === "banding") await viewBanding(arg && decodeURIComponent(arg));
     else { location.hash = "#beranda"; return; }
@@ -2210,6 +2335,15 @@ app.addEventListener("click", (ev) => {
   else if (a === "save-config") saveConfig();
   else if (a === "src-logout") sourceLogout();
   else if (a === "md-add-prd") mdAddPrd();
+  else if (a === "hist-del") {
+    if (el.dataset.confirm !== "1") { el.dataset.confirm = "1"; el.textContent = "Yakin hapus?"; el.classList.add("btn-danger-confirm"); setTimeout(() => { if (el.isConnected) { el.dataset.confirm = ""; el.textContent = "Hapus"; el.classList.remove("btn-danger-confirm"); } }, 4000); return; }
+    api(el.dataset.url, { method: "DELETE" }).then(() => { toast("Dihapus dari Riwayat"); viewRiwayat(); }).catch((e) => toast(e.message, true));
+  }
+  else if (a === "upd-check") viewVersi(true);
+  else if (a === "upd-apply") updateApply(el);
+  else if (a === "vault-forget") api("/api/vault/forget", { method: "POST", body: {} }).then(() => { toast("Kunci di laptop ini dilepas"); viewPengaturan(); }).catch((e) => toast(e.message, true));
+  else if (a === "vault-mode") { S.vaultMode = el.dataset.mode; viewPengaturan().then(() => document.getElementById("vl-pass")?.focus()); }
+  else if (a === "vault-cancel") { S.vaultMode = null; viewPengaturan(); }
   else if (a === "cmp-start") cmpStart();
   else if (a === "cmp-reset") { api("/api/compare/reset", { method: "POST" }).then(() => { S.cmpView = null; viewBanding(); }).catch((e) => toast(e.message, true)); }
   else if (a === "cmp-file-clear") { const s = cmpState()[el.dataset.side]; s.file = null; s.token = null; viewBanding(); }
@@ -2241,6 +2375,7 @@ app.addEventListener("click", (ev) => {
 
 app.addEventListener("submit", (ev) => {
   if (ev.target.id === "src-form") { ev.preventDefault(); sourceLogin(ev.target); }
+  if (ev.target.id === "vault-form") { ev.preventDefault(); vaultSubmit(ev.target); }
 });
 
 app.addEventListener("keydown", (ev) => {
@@ -2335,6 +2470,7 @@ setInterval(async () => {
 
 refreshNav();
 route();
+setTimeout(() => checkUpdate(false), 4000); // cek versi baru di GitHub sekali saat dibuka (diam bila tanpa internet)
 
 /* ================================================================= LAYAR PEMBUKA */
 // Muncul sekali setiap TƎRᗩ dibuka di tab baru. Setelah klik Masuk, refresh halaman tidak memunculkannya lagi.

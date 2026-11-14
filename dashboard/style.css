@@ -236,7 +236,7 @@ main {
 /* ---------------------------------------------------------------- forms */
 label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 500; }
 .hint { font-size: 13px; font-weight: 400; color: var(--muted); }
-input[type="text"], input[type="number"], input[type="search"], input[type="password"], input[type="url"], #src-form input, select {
+input[type="text"], input[type="number"], input[type="search"], input[type="password"], input[type="url"], #src-form input, #vault-form input, select {
   min-height: 44px;
   padding: 0 12px;
   border-radius: 6px;
@@ -263,7 +263,7 @@ input[type="checkbox"], input[type="radio"] { width: 18px; height: 18px; accent-
 .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; }
 .src-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
 .radio-card:has(input:disabled) { cursor: not-allowed; opacity: .7; }
-#src-form { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); align-items: start; }
+#src-form, #vault-form { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); align-items: start; }
 .src-status { display: flex; gap: 10px; align-items: flex-start; }
 fieldset { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 legend { padding: 0; margin-bottom: 6px; font-weight: 500; }
