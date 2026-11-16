@@ -48,6 +48,11 @@ data/server_ai/
 configs/sumber_ai.json
 configs/sumber_ai.tmp
 
+# --- Panduan pemilik/admin: hanya untuk pemilik TƎRᗩ, tidak dibagikan lewat GitHub ---
+# Simpan cadangannya DI LUAR folder TƎRᗩ: file ini tidak ikut Git, jadi bisa ikut terhapus
+# oleh pembersihan Git (git clean / "clean untracked files" di Visual Studio).
+PANDUAN_PEMILIK.md
+
 # --- Server AI bersama dan halaman admin akun: hanya untuk pemilik server, tidak dibagikan lewat GitHub ---
 Server_AI_dan_Admin_Akun.bat
 Jalankan_Server_AI.bat
