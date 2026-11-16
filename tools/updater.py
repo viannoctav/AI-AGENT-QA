@@ -24,8 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CONF = ROOT / "configs" / "update.json"
 BACKUP = ROOT / "data" / "cadangan_update"
 # folder/file milik pengguna: tidak pernah ditimpa atau dihapus
-PROTECTED_DIRS = ("runs", "outputs", "data", ".venv", ".git", ".vs", "__pycache__", "knowledge/prd")
-PROTECTED_FILES = ("configs/sumber_ai.json", "configs/kunci_referensi.json", "configs/update.json", "pasang_tera.log", ".env")
+PROTECTED_DIRS = ("runs", "outputs", "data", ".venv", ".git", ".vs", "__pycache__", "knowledge/prd",
+                  "ai_server")  # ai_server hanya ada di komputer pemilik server: jangan pernah ditimpa/dihapus
+PROTECTED_FILES = ("configs/sumber_ai.json", "configs/kunci_referensi.json", "configs/update.json", "pasang_tera.log",
+                   ".env", "Server_AI_dan_Admin_Akun.bat")
 KEEP_IF_EXISTS = ("knowledge/company_testcases/", "knowledge/forbidden_terms.json")  # hanya diisi bila belum ada
 MERGE_JSON = ("configs/ai.json",)
 CODE_EXT = (".py", ".js", ".css", ".html", ".bat", ".ps1")

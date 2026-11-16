@@ -80,12 +80,21 @@ def match_feature(text: str, fr_texts: Dict[str, str], titles: Dict[str, str]) -
     return titles.get(scores[0][1])
 
 
+def module_of(atom: Dict[str, Any], module_name: str, per_fr: bool = False) -> str:
+    """Module/Menu = area yang diuji. Pada PRD yang memakai sub-judul alur (dari desain) kolom ini diisi judul FR
+    ("Authentication"), bukan nama modul PRD yang sama untuk semua baris."""
+    if per_fr and atom.get("item_type") in ("FR", "NFR") and atom.get("item_title"):
+        return atom["item_title"]
+    return module_name or "General"
+
+
 def feature_of(atom: Dict[str, Any], titles: Dict[str, str], fr_texts: Optional[Dict[str, str]] = None) -> str:
     """Sub Module/Menu = fitur yang diuji: judul FR/NFR; decision table = judul tabelnya;
     edge case / state / acceptance criteria = judul FR terkait; tidak ada -> "-"."""
     itype = atom.get("item_type", "")
     if itype in ("FR", "NFR") and atom.get("item_title"):
-        return atom["item_title"]
+        sub = str(atom.get("sub_title") or "").strip()  # alur di dalam FR, mis. "Users - Create"
+        return sub if sub and tokens(sub) != tokens(atom["item_title"]) else atom["item_title"]
     if itype == "DT" and atom.get("item_title"):
         return atom["item_title"]
     rids = [str(r).upper() for r in atom.get("requirement_ids", [])]
@@ -116,7 +125,7 @@ class _Builder:
             "atom_id": atom["atom_id"],
             "kind": atom["kind"],
             "requirement_ids": list(atom["requirement_ids"]),
-            "module": self.module_name,
+            "module": module_of(atom, self.module_name, getattr(self, "per_fr_module", False)),
             "sub_label": feature_of(atom, self.titles, self.fr_texts),
             "technique": technique,
             "polarity": polarity,
@@ -590,6 +599,8 @@ def design_obligations(atoms: List[Dict[str, Any]], hints: Optional[Dict[str, st
             fr_texts[a["source"]] = fr_texts.get(a["source"], "") + " " + a.get("text", "") + " " + \
                 " ".join(x.get("text", "") for x in a.get("aliases", []))
     b = _Builder(hints or {}, module_name, titles, fr_texts)
+    # PRD dari desain memakai sub-judul alur: kolom Module diisi per FR, Sub Module diisi alurnya
+    b.per_fr_module = any(str(a.get("sub_title") or "").strip() for a in atoms)
     for atom in atoms:
         design_atom(b, atom, atoms)
     obs = b.obs
@@ -876,4 +887,4 @@ def test_designer_node(state: dict) -> dict:
         by_tech[o["technique"]] = by_tech.get(o["technique"], 0) + 1
     ui.stage("design", f"{len(obs)} obligation")
     ui.event("designer", f"obligations={len(obs)} techniques={by_tech}")
-    return {"obligations": obs, "ob_queue": list(obs)}
+    return {"obligations": obs, "ob_queue": list(obs)}

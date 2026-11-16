@@ -396,9 +396,12 @@ def atomize(structure: Dict[str, Any]) -> Dict[str, Any]:
         if it["description"] and it["rules"] and it["type"] != "NFR":
             atoms.append({**base, "kind": "flow", "params": {}, "text": it["description"]})
             made += 1
-        for rule in it["rules"]:
+        subs = it.get("rule_subs") or []
+        for i_r, rule in enumerate(it["rules"]):
+            sub = subs[i_r] if i_r < len(subs) else ""
             for a in extract_rule_atoms(rule, ctx_title=it["title"], is_nfr=(it["type"] == "NFR")):
-                atoms.append({**base, **a, "requirement_ids": list(base["requirement_ids"])})
+                atoms.append({**base, **a, "requirement_ids": list(base["requirement_ids"]),
+                              "sub_title": sub})  # alur asal aturan -> Sub Module/Menu
                 made += 1
         for e in extract_transitions(it.get("transition_lines", [])):
             transitions.append({**e, "ids": [it["id"]], "ctx": it["title"], "from_item": True})
@@ -579,4 +582,4 @@ def _items_from_requirements(requirements: Dict[str, Any]) -> List[Dict[str, Any
         items.append({"id": rid, "type": "NFR" if rid.startswith("NFR") else ("BR" if rid.startswith("BR") else "FR"),
                       "title": r.get("title", rid), "description": r.get("description", ""),
                       "rules": [str(x) for x in rules], "section": "", "order": i, "transition_lines": []})
-    return items
+    return items

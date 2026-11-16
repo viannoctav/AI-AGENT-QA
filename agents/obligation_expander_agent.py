@@ -65,7 +65,16 @@ def _format_ob(ob: Dict[str, Any], feedback: Optional[str]) -> str:
     return "\n".join(lines)
 
 
-def _prompt_examples(batch: List[Dict[str, Any]]) -> Dict[str, str]:
+def _field_from_rule(batch: List[Dict[str, Any]]) -> Optional[str]:
+    """Nama field dari kalimat aturan, mis. 'pengguna mengisi "Email", "Password"' -> Email."""
+    for o in batch:
+        m = re.search(r"(?:mengisi|memilih|mengatur)\s+\"([^\"]{2,40})\"", str(o.get("rule_text") or ""))
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def _prompt_examples(batch: List[Dict[str, Any]], hints: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """Contoh di instruksi dibangun dari obligation yang sedang ditulis (nama fitur/field/status dari PRD ini),
     supaya istilah dari PRD lain tidak terbawa ke test case."""
     feat = next((o.get("sub_label") for o in batch if o.get("sub_label") not in (None, "", "-")), None) \
@@ -76,7 +85,8 @@ def _prompt_examples(batch: List[Dict[str, Any]]) -> Dict[str, str]:
         if m:
             field = m.group(1).strip()
             break
-    field = field or feat
+    # jangan memakai nama fitur sebagai nama field: kolom Test Case jadi berisi "<fitur>: <nilai>"
+    field = field or _field_from_rule(batch) or next(iter(hints or {}), None) or "field yang diuji"
     state = None
     for o in batch:
         m = re.search(r"State awal\s*=\s*([A-Z_]+)", o.get("precondition") or "")
@@ -95,7 +105,7 @@ def _prompt_examples(batch: List[Dict[str, Any]]) -> Dict[str, str]:
 
 def build_prompt(batch: List[Dict[str, Any]], hints: Dict[str, str], feedback: Dict[str, str]) -> str:
     hint_txt = "\n".join(f"- {k}: {v}" for k, v in (hints or {}).items()) or "-"
-    ex = _prompt_examples(batch)
+    ex = _prompt_examples(batch, hints)
     blocks = "\n\n".join(_format_ob(ob, feedback.get(ob["ob_id"])) for ob in batch)
     style_txt = _style_examples(batch)
     return f"""Tulis SATU test case untuk SETIAP obligation di bawah (jumlah test case = {len(batch)}).
@@ -220,4 +230,4 @@ def obligation_expander_node(state: dict) -> dict:
     ui.batch_start([o["ob_id"] for o in batch], attempt + 1)
     if len(drafts) < len(batch):
         ui.event("expander", f"draft {len(drafts)}/{len(batch)} (attempt {attempt + 1})", "yellow")
-    return {"draft_map": drafts}
+    return {"draft_map": drafts}

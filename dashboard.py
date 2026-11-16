@@ -905,10 +905,10 @@ def upload_design_image(body):
     return {"id": fid, "name": name, "screens": screens, "width": size[0], "height": size[1]}
 
 
-def _design_worker(cards, extra, name):
+def _design_worker(cards, extra, name, resume=None):
     from design_to_prd.pipeline import run as design_run
     try:
-        res = design_run(cards, extra=extra, name=name, progress=DESIGN["progress"],
+        res = design_run(cards, extra=extra, name=name, progress=DESIGN["progress"], resume=resume,
                          cb=lambda m: DESIGN["log"].append({"time": time.time(), "msg": m}))
         doc = res["document"]
         DESIGN["result"] = {
@@ -932,6 +932,49 @@ def _design_worker(cards, extra, name):
         for c in cards:  # gambar unggahan sudah disalin ke folder hasil
             for im in c.get("images") or []:
                 Path(im["path"]).unlink(missing_ok=True)
+
+
+def design_interrupted():
+    """Penyusunan PRD desain yang terhenti (mati di tengah / ditutup) dan masih bisa dilanjut per fitur."""
+    from design_to_prd.pipeline import interrupted
+    return {"items": interrupted() if DESIGN["status"] != "berjalan" else []}
+
+
+def discard_design(body):
+    from design_to_prd.pipeline import discard
+    if DESIGN["status"] == "berjalan":
+        raise ApiError(409, "Penyusunan PRD masih berjalan. Tunggu sampai selesai.")
+    if not discard(str((body or {}).get("id") or "")):
+        raise ApiError(404, "Proses terhenti itu sudah tidak ada.")
+    return {"ok": True}
+
+
+def resume_design(body):
+    """Lanjutkan proses yang terhenti: fitur yang sudah selesai tidak dibaca ulang."""
+    from design_to_prd.pipeline import interrupted
+    rid = Path(str((body or {}).get("id") or "")).name
+    item = next((x for x in interrupted() if x["id"] == rid), None)
+    if not item:
+        raise ApiError(404, "Proses terhenti itu sudah tidak ada. Susun ulang dari awal.")
+    _design_busy_check()
+    require_ai()
+    DESIGN.update({"status": "berjalan", "log": [], "result": None, "error": None, "progress": {},
+                   "started": time.time(), "finished": None, "name": item["nama"]})
+
+    def go():
+        keep_awake(True)
+        _design_worker([], "", item["nama"], resume=rid)
+    threading.Thread(target=go, daemon=True).start()
+    return {"ok": True}
+
+
+def _design_busy_check():
+    if ACTIVE["id"]:
+        raise ApiError(409, "Masih ada proses pembuatan test case yang berjalan. Tunggu sampai selesai.")
+    if NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan":
+        raise ApiError(409, "Masih ada penyusunan PRD yang berjalan. Tunggu sampai selesai.")
+    if COMPARE["status"] == "berjalan":
+        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
 
 
 def start_design(body):
@@ -984,12 +1027,7 @@ def start_design(body):
         raise ApiError(400, "Total penjelasan terlalu panjang (maksimal 200.000 karakter).", "dz-extra")
     if any(c["images"] for c in cards) and not ocr_available():
         raise ApiError(400, "Membaca teks gambar memakai fitur bawaan Windows, jadi hanya bisa di laptop Windows.")
-    if ACTIVE["id"]:
-        raise ApiError(409, "Masih ada proses pembuatan test case yang berjalan. Tunggu sampai selesai.")
-    if NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan":
-        raise ApiError(409, "Masih ada penyusunan PRD yang berjalan. Tunggu sampai selesai.")
-    if COMPARE["status"] == "berjalan":
-        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
+    _design_busy_check()
     require_ai()
     DESIGN.update({"status": "berjalan", "log": [], "result": None, "error": None, "progress": {},
                    "started": time.time(), "finished": None, "name": name})
@@ -1405,6 +1443,9 @@ route("GET", "/api/design")(lambda h, q: {**DESIGN, "now": time.time()})
 route("POST", "/api/design")(lambda h, q: start_design(h.json_body()))
 route("POST", "/api/design/reset")(lambda h, q: reset_design())
 route("POST", "/api/design/images")(lambda h, q: upload_design_image(h.json_body(limit=60_000_000)))
+route("GET", "/api/design/terhenti")(lambda h, q: design_interrupted())
+route("POST", "/api/design/lanjut")(lambda h, q: resume_design(h.json_body()))
+route("POST", "/api/design/buang")(lambda h, q: discard_design(h.json_body()))
 route("GET", "/api/compare")(lambda h, q: compare_info())
 route("POST", "/api/compare")(lambda h, q: start_compare(h.json_body()))
 route("POST", "/api/compare/reset")(lambda h, q: reset_compare())

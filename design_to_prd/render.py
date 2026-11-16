@@ -10,7 +10,8 @@ def render_markdown(doc: Dict[str, Any]) -> str:
     md = ftr.render_markdown(doc)
     meta = doc.get("meta", {})
     purpose = (f"**Document Purpose:** Disusun otomatis dari {meta.get('source', 'desain')} ({meta.get('created', '')}). "
-               "Teks di dalam tanda kutip disalin persis dari desain.")
+               "Teks di dalam tanda kutip disalin persis dari desain; hal yang tidak terlihat di desain tidak "
+               "ditambahkan sendiri, melainkan ditanyakan di bagian Open Points.")
     return re.sub(r"^\*\*Document Purpose:\*\*.*$", lambda m: purpose, md, count=1, flags=re.M)
 
 
@@ -44,6 +45,12 @@ def render_review(doc: Dict[str, Any], rejected: List[Dict[str, Any]], screens: 
         L.append(f"- {ftr._txt(r.get('pernyataan') or '-')} Alasan: {r.get('alasan', '')}.")
     if not rejected:
         L.append("- Tidak ada.")
+    det = [(f["name"], r) for f in doc.get("features", []) for r in f["rules"] if r.get("jenis") == "rincian"]
+    n += 1
+    L += ["", f"## {n}. Rincian isi layar (bukan bagian PRD)", "",
+          "Daftar elemen yang terlihat di desain: tombol lain, kolom tabel, menu, tab, status, dan contoh isian. "
+          "Tidak dimasukkan ke PRD supaya PRD tetap berisi alur dan aturan. Tambahkan manual bila memang perlu diuji.", ""]
+    L += [f"- {f'{name}: ' if name else ''}{ftr._txt(r['pernyataan'])}" for name, r in det[:400]] or ["- Tidak ada."]
     n += 1
     L += ["", f"## {n}. Teks yang terbaca per layar", "",
           "Dibaca oleh pembaca teks Windows (persis seperti di desain, termasuk salah ketik). Jenis elemen ditentukan AI.", ""]
@@ -58,8 +65,5 @@ def render_review(doc: Dict[str, Any], rejected: List[Dict[str, Any]], screens: 
             L.append(f"- [{e['jenis']}{st}] {e['teks']}")
         L.append("")
     n += 1
-    L += [f"## {n}. Asal setiap aturan", ""]
-    for i, f in enumerate(doc.get("features", []), 1):
-        for k, r in enumerate(f["rules"], 1):
-            L.append(f"- FR-{i:03d} aturan {k}: {r.get('sumber') or '-'}")
+    L += [f"## {n}. Asal setiap aturan (traceability)", ""] + (doc.get("_trace") or ["- Tidak ada."])
     return "\n".join(L).rstrip() + "\n"

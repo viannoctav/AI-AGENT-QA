@@ -56,6 +56,35 @@ def extract(lines: List[str], idx: List[int], llm, cb=None) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+_KLIK = re.compile(r"\b(?:meng-?)?(?:klik|mengklik|menekan|tekan|pencet|tap|pilih menu)\s+"
+                   r"(?:tombol|button|menu|link|tautan|icon|ikon)?\s*", re.I)
+_PENGGUNA = re.compile(r"^(?:user|pengguna|qa|tester|admin)\s+", re.I)
+
+
+def _aksi(nama: str) -> str:
+    """Nama tombol/aksi dari catatan -> maksud bisnisnya ("Simpan" -> "menyimpan")."""
+    t = re.sub(r"[\s,.;:]+$", "", str(nama or "").strip().strip('"\''))
+    hasil = guards.intent(t)
+    if hasil and " " not in hasil and len(t.split()) > 1:
+        hasil += " " + t.split(" ", 1)[1]  # objeknya tetap dibawa: "Hapus data" -> "menghapus data"
+    return hasil or f"menjalankan {t}"
+
+
+def _business(t: str) -> str:
+    """Rapikan kalimat langkah layar menjadi kalimat aturan bisnis, tanpa mengubah istilah dari catatan."""
+    s = t.strip()
+    # "user klik tombol Simpan lalu muncul pesan X" -> "Pengguna dapat menyimpan ...; sistem menampilkan pesan X"
+    m = re.match(r"^(?:user|pengguna)\s+(?:klik|mengklik|menekan|tekan|tap)\s+(?:tombol|button|menu)?\s*"
+                 r"(.+?)\s*(?:,|\s)(?:lalu|kemudian|maka|terus|baru)\s+(.+)$", s, re.I)
+    if m:
+        akibat = re.sub(r"^(muncul|tampil|keluar)\b", "sistem menampilkan", m.group(2).strip(), flags=re.I)
+        return f"Pengguna dapat {_aksi(m.group(1))}; bila berhasil {akibat.rstrip('.')}."
+    m = re.match(r"^(?:user|pengguna)\s+(?:bisa|dapat|boleh)\s+" + _KLIK.pattern + r"(.+)$", s, re.I)
+    if m:
+        return f"Pengguna dapat {_aksi(m.group(1))}."
+    return (s[0].upper() + s[1:]) if s and s[0].islower() else s
+
+
 def _clean_item(it: Dict[str, Any]) -> Dict[str, Any]:
     j = str(it.get("jenis") or "").strip().lower()
     it["jenis"] = j if j in _JENIS else "aturan"
@@ -96,6 +125,9 @@ def run(text: str, name: str = "", source_name: str = "catatan", llm=None, cb=No
             ok, why, ln = guards.check_item(it, lines)
             it["baris"] = ln
             if ok:
+                # dirapikan jadi kalimat aturan bisnis SETELAH lolos penjaga kutipan, supaya penjaganya
+                # tetap menilai kalimat asli dari catatan
+                it["pernyataan"] = _business(it["pernyataan"])
                 if not any(guards.norm(a["pernyataan"]) == guards.norm(it["pernyataan"]) for a in accepted):
                     accepted.append(it)
             else:

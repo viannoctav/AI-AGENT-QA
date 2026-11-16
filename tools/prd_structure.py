@@ -177,12 +177,20 @@ def _is_transition_line(line: str) -> bool:
     return "\u2192" in t and len(t) < 160
 
 
+_SUBHEAD = re.compile(r"^\*\*(.+?)\*\*\s*$")
+_AC_LABEL = re.compile(r"^[*_\s]*acceptance criteria[*_\s:]*$", re.IGNORECASE)
+
+
 def _parse_item_body(lines: List[str]) -> Dict[str, Any]:
     desc_lines: List[str] = []
     rules: List[str] = []
+    rule_subs: List[str] = []
+    acceptance: List[str] = []
     transition_lines: List[str] = []
     in_table = False
     last_bullet = False
+    sub = ""        # sub-judul alur di dalam FR -> jadi Sub Module/Menu di test case
+    in_ac = False   # daftar Acceptance Criteria: ringkasan aturan di atasnya, jangan dihitung dua kali
     for raw in lines:
         s = raw.rstrip()
         if not s.strip():
@@ -194,12 +202,24 @@ def _parse_item_body(lines: List[str]) -> Dict[str, Any]:
         if _is_transition_line(s) or re.fullmatch(r"\s*`[A-Z][A-Z0-9_]{2,}`\s*", s):
             transition_lines.append(s)
             continue
+        if _AC_LABEL.match(s.strip()):
+            in_ac, last_bullet = True, False
+            continue
+        sh = _SUBHEAD.match(s.strip())
+        if sh and not _RULES_LABEL.match(strip_md(s)):
+            sub, in_ac, last_bullet = strip_md(sh.group(1)), False, False
+            continue
         if _RULES_LABEL.match(strip_md(s)):
-            last_bullet = False
+            sub, in_ac, last_bullet = "", False, False
             continue
         m = _BULLET.match(s)
         if m:
+            if in_ac:
+                acceptance.append(strip_md(m.group(2)))
+                last_bullet = False
+                continue
             rules.append(strip_md(m.group(2)))
+            rule_subs.append(sub)
             last_bullet = True
             continue
         if last_bullet and s.startswith("  "):
@@ -214,6 +234,8 @@ def _parse_item_body(lines: List[str]) -> Dict[str, Any]:
     return {
         "description": " ".join(desc_lines).strip(),
         "rules": rules,
+        "rule_subs": rule_subs,
+        "acceptance": acceptance,
         "transition_lines": transition_lines,
         "has_table": in_table,
     }
@@ -265,7 +287,7 @@ def parse_prd_markdown(text: str) -> Dict[str, Any]:
     hints: Dict[str, str] = {}
     seen_ids = set()
 
-    def add_item(rid, title, description, rules, section, transition_lines=None):
+    def add_item(rid, title, description, rules, section, transition_lines=None, rule_subs=None):
         rid = rid.upper()
         if rid in seen_ids:
             return
@@ -274,6 +296,7 @@ def parse_prd_markdown(text: str) -> Dict[str, Any]:
             "id": rid, "type": item_type(rid), "title": title, "description": description,
             "rules": rules, "section": section, "order": len(items),
             "transition_lines": transition_lines or [],
+            "rule_subs": list(rule_subs or []),  # sub-judul alur per aturan (Sub Module/Menu)
         })
 
     for sec in sections:
@@ -286,7 +309,8 @@ def parse_prd_markdown(text: str) -> Dict[str, Any]:
                 sents = _split_sentences(desc)
                 if len(sents) >= 1:
                     rules, desc = sents, ""
-            add_item(sec["id"], sec["title"], desc, rules, sec["parent"], parsed["transition_lines"])
+            add_item(sec["id"], sec["title"], desc, rules, sec["parent"], parsed["transition_lines"],
+                     parsed.get("rule_subs"))
             continue
 
         # tabel dengan ID di kolom pertama -> item

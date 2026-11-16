@@ -127,3 +127,44 @@ def similar(a: str, b: str) -> float:
     if not wa or not wb:
         return 0.0
     return len(wa & wb) / len(wa | wb)
+
+
+# kata kerja pada tombol/aksi -> maksud bisnisnya, dipakai Desain ke PRD dan Catatan ke PRD, supaya aturan berbunyi "Pengguna dapat menambahkan user",
+# bukan "pengguna menekan tombol Add user". Hanya kata kerja yang jelas; selain itu kalimat alur dipakai apa adanya.
+_VERBS = [
+    (r"^(?:add|create|new|tambah)\b", "menambahkan"), (r"^(?:save|simpan|apply|terapkan)\b", "menyimpan"),
+    (r"^(?:update|perbarui|ubah|edit|change)\b", "mengubah"), (r"^(?:delete|remove|hapus)\b", "menghapus"),
+    (r"^(?:reset)\b", "mengatur ulang"), (r"^(?:resend|kirim ulang)\b", "mengirim ulang"),
+    (r"^(?:send|submit|kirim)\b", "mengirim"), (r"^(?:export|download|unduh)\b", "mengunduh"),
+    (r"^(?:upload|unggah)\b", "mengunggah"), (r"^(?:confirm|konfirmasi)\b", "mengonfirmasi"),
+    (r"^(?:approve|setujui)\b", "menyetujui"), (r"^(?:reject|decline|tolak)\b", "menolak"),
+    (r"^(?:assign)\b", "menugaskan"), (r"^(?:invite|undang)\b", "mengundang"),
+    (r"^(?:print|cetak)\b", "mencetak"), (r"^(?:filter|search|cari)\b", "menyaring daftar"),
+    (r"^(?:book|schedule|jadwal)\b", "menjadwalkan"), (r"^(?:pay|bayar|checkout)\b", "melakukan pembayaran"),
+    (r"^(?:activate|aktifkan)\b", "mengaktifkan"), (r"^(?:deactivate|nonaktifkan|disable)\b", "menonaktifkan"),
+]
+_GENERIC = {"changes", "change", "data", "info", "information", "all", "now", "it", "this", "perubahan", "semua"}
+_LOGIN_ACT = re.compile(r"^(log ?in|sign ?in|masuk)\b", re.I)
+_LOGOUT_ACT = re.compile(r"^(log ?out|sign ?out|keluar)\b", re.I)
+
+
+def intent(btn: str, title: str = "") -> str:
+    """Maksud bisnis dari sebuah tombol, mis. "Add user" -> "menambahkan user". "" bila tidak yakin."""
+    t = re.sub(r"\s+", " ", str(btn or "")).strip()
+    if not t:
+        return ""
+    if _LOGIN_ACT.match(t):
+        return "masuk ke aplikasi"
+    if _LOGOUT_ACT.match(t):
+        return "keluar dari aplikasi"
+    for pat, verb in _VERBS:
+        m = re.match(pat, t, re.I)
+        if not m:
+            continue
+        obj = re.sub(r"[?!.]+$", "", t[m.end():].strip(" -:·").strip())
+        if obj.lower() in _GENERIC or not obj:
+            # "Save changes" tidak menyebut objeknya: ambil dari judul layar, mis. "Edit user" -> "mengubah user"
+            dari_judul = intent(title) if title and norm(title) != norm(t) else ""
+            return dari_judul or verb
+        return f"{verb} {obj}".strip()
+    return ""

@@ -66,8 +66,12 @@ def fill_labels(lines: List[Dict[str, Any]], lab: Dict[str, Any]) -> Dict[int, A
             continue
         under_label = any(0 <= ln["y"] - (lines[k - 1]["y"] + lines[k - 1]["h"]) <= max(70, 4 * lines[k - 1]["h"])
                           and abs(ln["x"] - lines[k - 1]["x"]) <= 80 for k in label_nos)
+        def _blocks(o):  # yang di bawahnya tampak isian form -> baris ini kemungkinan label, bukan tombol
+            t2 = str(o.get("text") or "").strip()
+            return not (_ACTION.match(t2) or _LINKISH.search(t2) or "?" in t2 or len(t2.split()) > 8)
+
         nothing_below = not any(0 < o["y"] - (ln["y"] + ln["h"]) <= 4 * ln["h"] and abs(o["x"] - ln["x"]) <= 80
-                                for o in lines if o is not ln)
+                                and _blocks(o) for o in lines if o is not ln)
         if _PLACEHOLDER.search(t) and len(words) <= 6 and (under_label or n <= 40):
             labels[i] = ("placeholder", [])
         elif _LINKISH.search(t) and len(words) <= 9 and n <= 60:
@@ -97,6 +101,8 @@ def guess_title(lines: List[Dict[str, Any]], labels: Dict[int, Any]) -> int:
             continue
         if sum(c.isdigit() for c in t) > 0.25 * len(t) or re.match(r"^(rp|idr|usd|\$)\s?\d", t, re.I) or _DATEISH.match(t):
             continue  # tanggal/nominal bukan judul layar
+        if " " not in t and (len(t) < 4 or re.search(r"[a-z][A-Z]", t) or not re.search(r"[aeiou]", t, re.I)):
+            continue  # satu kata yang tidak berbentuk kata (biasanya ikon/logo yang terbaca OCR)
         cands.append((ln["y"], ln["h"], i))
     if not cands:
         return 0
@@ -239,10 +245,18 @@ def _fill(f, i):
 # ---------------------------------------------------------------------------
 # gabung layar yang sama (mis. form kosong dan form terisi) lalu jadi aturan
 # ---------------------------------------------------------------------------
+_GREETING = re.compile(r"^(welcome|hi\b|hello|halo|hai\b|selamat\b|good (morning|afternoon|evening))|!$", re.I)
+
+
 def screen_name(s: Dict[str, Any]) -> str:
     if s["kind"] == "notifikasi" and (s["title"] or s["notif"]):
         return f"Notifikasi {q(s['title'] or s['notif'][0])}"
     if s["title"]:
+        # judul berupa sapaan/seruan tidak berguna di PRD: pakai nama aksi utamanya bila ada
+        if _GREETING.search(s["title"].strip()) and s["fields"]:
+            main = [b for b, _ in s["buttons"] if not _SECONDARY.match(b)]
+            if main:
+                return main[-1]
         return s["title"]
     if s["kind"] == "menu" or (s["menus"] and not s["fields"] and not s["buttons"] and len(s["menus"]) <= 8):
         return "Menu aksi"
@@ -294,10 +308,92 @@ def _states_note(items):
 # alur bisnis: bingkai sampul di papan alur = nama alur; layar sesudahnya = langkah alur itu
 # ---------------------------------------------------------------------------
 BIG_SCREEN = 40  # layar dengan teks sebanyak ini biasanya halaman daftar/dasbor: teks lepasnya tidak dijadikan aturan
+_MAILBOX = {"inbox", "sent", "drafts", "spam", "starred", "trash", "archive", "junk", "snoozed", "kotak masuk", "terkirim"}
+
+
+def _is_mail_client(g: Dict[str, Any]) -> bool:
+    """Layar aplikasi email (mis. mockup Gmail): isi emailnya dipakai, tetapi menu dan tombol aplikasinya diabaikan."""
+    items = {guards.norm(m) for m, _ in g["menus"]} | {guards.norm(t) for t, _ in g["tabs"]}
+    return len(items & _MAILBOX) >= 3
 
 
 def _is_form(g: Dict[str, Any]) -> bool:
     return sum(1 for f in g["fields"] if f["kind"] in ("input", "dropdown", "") ) >= 1 and g.get("n_lines", 0) <= BIG_SCREEN
+
+
+_SECONDARY = re.compile(r"^(cancel|batal|close|tutup|back|kembali|previous|sebelumnya|discard|buang|skip|lewati|"
+                        r"later|nanti|no\b|tidak|keluar|logout|sign ?out)", re.I)
+
+
+_BEHAVIOUR = re.compile(r"\b(will|akan|cannot|can't|tidak bisa|tidak akan|undone|dibatalkan|dihapus|permanen|"
+                        r"berlaku|expire[sd]?|kedaluwarsa|otomatis|automatically|reserved|dikirim|sent to)\b", re.I)
+
+
+def _is_rule_text(t: str) -> bool:
+    """Kalimat di layar yang benar-benar berisi aturan/akibat, bukan sekadar keterangan atau basa-basi."""
+    return bool(_RULEISH.search(t) or _BEHAVIOUR.search(t))
+
+
+def _buttons(g: Dict[str, Any]):
+    """(tombol utama, tombol batal/kembali) di satu layar."""
+    main, alt = [], []
+    for b, st in g["buttons"]:
+        (alt if _SECONDARY.match(b) else main).append((b, st))
+    return main, alt
+
+
+_LOGOUT = re.compile(r"^(log ?out|sign ?out|keluar)\b", re.I)
+_LOGIN_SCREEN = re.compile(r"\b(log ?in|sign ?in|masuk)\b", re.I)
+
+
+def _stem(w: str) -> str:
+    w = re.sub(r"[^a-z0-9]", "", w.lower())
+    return re.sub(r"(ed|ing|s)$", "", w) if len(w) > 4 else w
+
+
+def _overlap(text: str, words: set) -> int:
+    return len({_stem(w) for w in guards.norm(text).split()} & words)
+
+
+def _words(*texts) -> set:
+    return {_stem(w) for t in texts for w in guards.norm(t or "").split()} - {"the", "a", "an", "your", "my"}
+
+
+def _trigger(g: Dict[str, Any], nxt: Optional[Dict[str, Any]]):
+    """(teks aksi, dari_tombol, cocok_dengan_layar_berikutnya) yang membawa pengguna ke layar berikutnya."""
+    btns = [b for b, _ in g["buttons"]]
+    cands = btns + list(g["links"]) + [m for m, _ in g["menus"]]
+    if nxt is not None and cands:
+        goal = _words(nxt.get("name"), nxt.get("title"))
+        if _LOGIN_SCREEN.search(f"{nxt.get('name') or ''} {nxt.get('title') or ''}"):
+            out = next((c for c in cands if _LOGOUT.match(c)), "")  # keluar dari aplikasi -> kembali ke halaman masuk
+            if out:
+                return out, out in btns, True
+        best, hit = "", 0
+        for c in cands:
+            n = _overlap(c, goal)
+            if n > hit:
+                best, hit = c, n
+        if best:
+            return best, best in btns, True
+    main, _ = _buttons(g)
+    return (main[-1][0], True, False) if main else ("", False, False)
+
+
+def _result(nxt: Optional[Dict[str, Any]]) -> str:
+    """Apa yang terjadi sesudahnya, dilihat dari layar berikutnya."""
+    if nxt is None:
+        return ""
+    lbl = _step_label(nxt)
+    if lbl.startswith("notifikasi"):
+        head = nxt["title"] or (nxt["notif"][0] if nxt["notif"] else "")
+        rest = [x for x in nxt["notif"] if x != head][:2]
+        if not head:
+            return ""
+        return f"sistem menampilkan notifikasi {q(head)}" + (f" dengan pesan {qlist(rest, 2)}" if rest else "")
+    if lbl == "layar berikutnya":
+        return ""
+    return f"sistem membuka {lbl}"
 
 
 def _step_label(g: Dict[str, Any]) -> str:
@@ -332,15 +428,37 @@ def split_flows(screens: List[Dict[str, Any]], card: str) -> List[Dict[str, Any]
     return [f for f in flows if f["screens"]]
 
 
+_NOISE = re.compile(r"%|\brow\(s\)|\bvs\b|\bPage \d|\d+\s+of\s+\d+|^\W*\d", re.I)
+
+
+def _is_hint(t: str, title: str = "") -> bool:
+    """Kalimat petunjuk di layar (dipakai sebagai keterangan), bukan angka tabel atau statistik."""
+    return (len(t.split()) >= 5 and not _is_rule_text(t) and not _NOISE.search(t)
+            and guards.norm(t) != guards.norm(title or "") and bool(re.match(r"[A-Za-z]", t.strip())))
+
+
+_intent = guards.intent  # pemetaan tombol -> maksud bisnis (dipakai bersama dengan Catatan ke PRD)
+_LOGIN_ACT, _LOGOUT_ACT = guards._LOGIN_ACT, guards._LOGOUT_ACT
+
+
+def intro_of(what: str, hint: str = "") -> str:
+    """Pembuka kalimat kebutuhan: "Pada form "Login" (bertuliskan "...")"."""
+    return f"Pada {what}" + (f" yang bertuliskan {q(hint)}" if hint else "")
+
+
 def card_rules(card: str, screens: List[Dict[str, Any]], nav_seen: set, described: set) -> List[Dict[str, Any]]:
     """Aturan PRD satu halaman/fitur, disusun per alur bisnis (bukan per elemen).
     `described`: layar yang isinya sudah dijelaskan (di alur atau fitur sebelumnya) tidak diulang."""
     R: List[Dict[str, Any]] = []
 
-    def add(text, quote, src, jenis="aturan", fitur=None):
+    # satu fitur (FR) = satu area/halaman; tiap alur jadi sub-judul di dalamnya, supaya kolom Module/Sub Module
+    # di test case terisi benar (Module = area, Sub Module = alur)
+    cur = {"fitur": card, "alur": ""}
+
+    def add(text, quote, src, jenis="aturan", fitur=None, alur=None):  # jenis "rincian" -> hanya catatan review
         if not any(guards.norm(r["pernyataan"]) == guards.norm(text) for r in R):
-            R.append({"jenis": jenis, "fitur": fitur or card, "pernyataan": text, "kutipan": quote, "baris": 0,
-                      "sumber": f"gambar {src}"})
+            R.append({"jenis": jenis, "fitur": fitur or cur["fitur"], "alur": cur["alur"] if alur is None else alur,
+                      "pernyataan": text, "kutipan": quote, "baris": 0, "sumber": f"gambar {src}"})
 
     for fl in split_flows(screens, card):
         groups = merge(fl["screens"])  # layar yang sama di dalam satu alur (form kosong dan terisi) digabung
@@ -350,19 +468,19 @@ def card_rules(card: str, screens: List[Dict[str, Any]], nav_seen: set, describe
             if not order or order[-1] is not g:
                 order.append(g)
         flow_name = fl["name"]
-        pre = f"Alur {q(flow_name)}: " if flow_name else "Alur: "
+        cur["fitur"] = card
+        cur["alur"] = flow_name if flow_name and guards.norm(flow_name) != guards.norm(card) else ""
         src_flow = fl["image"]
         steps = [_step_label(g) for g in order]
         steps = [x for i, x in enumerate(steps) if i == 0 or x != steps[i - 1]]
-        if len(steps) >= 2:
-            add(pre + ", lalu ".join(steps[:14]) + (", dan seterusnya" if len(steps) > 14 else "") + ".",
+        if len(steps) >= 3:  # peta singkat alurnya, supaya urutan layar tetap terbaca di PRD
+            add("Alur ini melewati " + " lalu ".join(steps[:14]) + (", dan seterusnya" if len(steps) > 14 else "") + ".",
                 flow_name or order[0]["title"], src_flow, "alur")
-        elif flow_name:
-            add(f"{pre}{steps[0]}.", flow_name, src_flow, "alur")
         prev = None
         seen_steps: List[Dict[str, Any]] = []
-        for g in order:
+        for pos, g in enumerate(order):
             seen_steps.append(g)
+            nxt = order[pos + 1] if pos + 1 < len(order) else None
             name, src = g["name"], ", ".join(g["sources"][:3])
             what = _step_label(g)
             ctx = f" pada alur {q(flow_name)}" if flow_name else ""
@@ -372,16 +490,25 @@ def card_rules(card: str, screens: List[Dict[str, Any]], nav_seen: set, describe
                 if head:
                     after = ""
                     # pemicu: layar sebelumnya bila tombolnya senada dengan isi notifikasi, selain itu form terakhir
-                    stem = lambda w: re.sub(r"(ed|d|e|s)$", "", w.lower().strip("!?.,")) if len(w) > 3 else w.lower()
-                    verb = stem(head.split()[-1]) if head.split() else ""
+                    goal = _words(head, *rest)
                     cand = [p for p in reversed(seen_steps[-5:-1]) if not _step_label(p).startswith(("notifikasi", "menu aksi"))]
-                    trig = next((p for p in cand if verb and any(stem(b.split()[0]) == verb for b, _ in p["buttons"] if b.split())), None) \
-                        or next((p for p in cand if _is_form(p)), None) or (cand[0] if cand else None)
+                    scored = []
+                    for p in cand:  # tombol lebih kuat daripada tautan/menu sebagai pemicu notifikasi
+                        acts = [(b, 2) for b, _ in p["buttons"]] + [(m, 1) for m, _ in p["menus"]] + [(l, 1) for l in p["links"]]
+                        best = max(((_overlap(a, goal) * w, a) for a, w in acts), default=(0, ""))
+                        # judul layar yang senada dengan isi notifikasi ikut menguatkan ("Service hours updated!")
+                        scored.append((best[0] + 2 * _overlap(p["title"] or "", goal), best[1], p))
+                    hit = max(scored, key=lambda x: x[0], default=(0, "", None))
+                    trig, act = (hit[2], hit[1]) if hit[0] else (next((p for p in cand if _is_form(p)), None) or (cand[0] if cand else None), "")
                     if trig is not None:
-                        btn = [b for b, _ in trig["buttons"]]
-                        after = f" setelah aksi di {_step_label(trig)}" + (f" (tombol {qlist(btn[-2:])})" if btn else "")
-                    add(f"Sistem menampilkan notifikasi {q(head)}" + (f" dengan pesan {qlist(rest, 3)}" if rest else "")
-                        + f"{after}{ctx}.", head, src)
+                        if not act:
+                            btn = [b for b, _ in trig["buttons"] if not _SECONDARY.match(b)]
+                            act = btn[-1] if btn else ""
+                        after = f" setelah pengguna menekan {q(act)} di {_step_label(trig)}" if act else f" setelah {_step_label(trig)}"
+                    # bila notifikasi ini sudah disebut sebagai hasil di kalimat alurnya, jangan diulang
+                    if not any(f"notifikasi {q(head)}" in r["pernyataan"] for r in R):
+                        add(f"Sistem menampilkan notifikasi {q(head)}" + (f" dengan pesan {qlist(rest, 3)}" if rest else "")
+                            + f"{after}{ctx}.", head, src)
                 prev = g
                 continue
             big = g.get("n_lines", 0) > BIG_SCREEN
@@ -391,59 +518,114 @@ def card_rules(card: str, screens: List[Dict[str, Any]], nav_seen: set, describe
                 continue
             described.add(key)
             if name == "Menu aksi":
-                add(f"Menu aksi{ctx} berisi pilihan {qlist([m for m, _ in g['menus']], 10)}{_states_note(g['menus'])}.",
+                add(f"Untuk setiap baris pada daftar, pengguna dapat memilih aksi "
+                    f"{qlist([m for m, _ in g['menus']], 10)}{_states_note(g['menus'])}.",
                     g["menus"][0][0] if g["menus"] else "", src)
                 prev = g
                 continue
             fields = [f for f in g["fields"] if f["name"]]
-            if fields and not big and (_is_form(g) or not g["menus"]):
-                parts = []
-                for f in fields[:24]:
-                    note = {"dropdown": "pilihan", "toggle": "saklar", "checkbox": "kotak centang", "radio": "pilihan bulat"}.get(f["kind"], "")
-                    if "nonaktif" in f["states"]:
-                        note = (note + ", " if note else "") + "tampak nonaktif"
-                    parts.append(q(f["name"]) + (f" ({note})" if note else ""))
-                add(f"{what[0].upper()}{what[1:]} berisi isian {', '.join(parts)}.", fields[0]["name"], src, "field")
-                hints = [(f["name"], f["placeholder"]) for f in fields if f["placeholder"] and guards.norm(f["placeholder"]) != guards.norm(f["name"])]
-                if hints:
-                    add(f"Teks petunjuk isian di {what}: " + "; ".join(f"{q(n)} bertuliskan {q(p)}" for n, p in hints[:10]) + ".",
-                        hints[0][1], src, "field")
-                for f in fields:
+            form_fields = fields if (not big and (_is_form(g) or not g["menus"])) else []
+            main_btn, alt_btn = _buttons(g)
+            trig, trig_is_button, trig_matched = _trigger(g, nxt)
+            hasil = _result(nxt)
+            side = ""
+            if trig and not trig_is_button and not trig_matched:  # tautan sampingan: jangan diklaim membawa ke layar berikutnya
+                side, trig = trig, ""
+            # satu kalimat kebutuhan yang mengalir: apa yang diisi, apa yang ditekan, dan apa hasilnya
+            hint = next((t for t in g["texts"] + g["messages"] if _is_hint(t, g["title"])), "")
+            langkah = []
+            if form_fields:
+                pilih = [f for f in form_fields[:14] if f["kind"] in ("dropdown", "radio")]
+                atur = [f for f in form_fields[:14] if f["kind"] in ("toggle", "checkbox")]
+                isi = [f for f in form_fields[:14] if f not in pilih and f not in atur]
+                if isi:
+                    langkah.append("mengisi " + qlist([f["name"] for f in isi], 10))
+                if pilih:
+                    langkah.append("memilih " + qlist([f["name"] for f in pilih], 6))
+                if atur:
+                    langkah.append("mengatur " + qlist([f["name"] for f in atur], 6))
+                mati = [f["name"] for f in form_fields if "nonaktif" in f["states"]]
+                if mati:
+                    add(f"Di {what}, {qlist(mati, 6)} tampak nonaktif pada desain.", mati[0], src)
+            if nxt is not None and nxt["name"] == "Menu aksi":  # aksinya sudah disebut di kalimat menu aksi
+                langkah, trig, hasil = [], "", ""
+            elif trig:
+                langkah.append(f"{'menekan' if trig_is_button else 'membuka'} {q(trig)}")
+            maksud = _intent(trig, g["title"]) if (trig_is_button or _LOGIN_ACT.match(trig or "")
+                                                   or _LOGOUT_ACT.match(trig or "")) else ""
+            data = [l.split(" ", 1)[1] for l in langkah if l.split(" ", 1)[0] in ("mengisi", "memilih", "mengatur")]
+            if maksud:
+                # aturan bisnis: siapa boleh melakukan apa, datanya apa, akibatnya apa
+                kalimat = f"Pengguna dapat {maksud}"
+                kalimat += (f" dengan mengisi {'; '.join(data)}" if data else f" dari {what}") + "."
+                if hasil:
+                    kalimat += f" Bila berhasil, {hasil}."
+                add(kalimat, (form_fields[0]["name"] if form_fields else trig) or name, src, "alur")
+            elif langkah:
+                kalimat = f"{intro_of(what, hint)}, pengguna {', lalu '.join(langkah)}."
+                if hasil:
+                    kalimat += f" Setelah itu {hasil}."
+                add(kalimat, (form_fields[0]["name"] if form_fields else trig) or name, src, "alur")
+            elif hasil:
+                add(f"Setelah {what}, {hasil}.", name, src, "alur")
+            elif hint:
+                add(f"Berlaku aturan {q(hint)}." if _is_rule_text(hint) else f"Di {what} tertulis {q(hint)}.",
+                    hint, src, "aturan" if _is_rule_text(hint) else "rincian")
+            if maksud and hint:  # keterangan layar tetap tercatat, tapi tidak menyetir kalimat aturannya
+                add(f"Berlaku aturan {q(hint)}." if _is_rule_text(hint) else f"Di {what} tertulis {q(hint)}.",
+                    hint, src, "aturan" if _is_rule_text(hint) else "rincian")
+            if side:
+                add(f"Di {what} tersedia juga {q(side)} sebagai jalan keluar lain.", side, src)
+            mail = _is_mail_client(g)
+            lain = [] if mail else [b for b, _ in main_btn if b != trig]
+            if lain:
+                add(f"Aksi lain di {what}: {qlist(lain, 8)}{_states_note([x for x in main_btn if x[0] != trig])}.",
+                    lain[0], src, "rincian")
+            if alt_btn:
+                if form_fields:
+                    add(f"Pengguna dapat membatalkan proses di {what} lewat {qlist([b for b, _ in alt_btn], 4)}, "
+                        f"dan perubahan yang belum disimpan tidak diterapkan.", alt_btn[0][0], src)
+                else:
+                    add(f"Pengguna dapat menutup {what} lewat {qlist([b for b, _ in alt_btn], 4)} tanpa mengubah data.",
+                        alt_btn[0][0], src)
+            if form_fields:
+                hints = [(f["name"], f["placeholder"]) for f in form_fields
+                         if f["placeholder"] and guards.norm(f["placeholder"]) != guards.norm(f["name"])]
+                if hints:  # contoh isian sudah ada di bagian Test Data Guidance PRD
+                    add(f"Contoh isian di {what}: " + "; ".join(f"{q(n)} bertuliskan {q(p)}" for n, p in hints[:10]) + ".",
+                        hints[0][1], src, "rincian")
+                for f in form_fields:
                     opts = [v for v in f["values"] if v] if f["kind"] == "dropdown" else []
                     if len(opts) >= 2:
                         add(f"Pilihan {q(f['name'])} di {what} yang terlihat di desain: {qlist(opts, 10)}.", opts[0], src, "field")
                     for h in f["help"]:
-                        add(f"Aturan isian {q(f['name'])} di {what}: {q(h)}.", h, src)
-            for m in [m for m in g["messages"] if len(m.split()) >= 3][:8]:
-                add(f"Di {what} tertulis aturan {q(m)}.", m, src)
-            acts = []
-            if g["buttons"]:
-                acts.append(f"tombol {qlist([b for b, _ in g['buttons']], 10)}{_states_note(g['buttons'])}")
-            if g["links"] and not big:
-                acts.append(f"tautan {qlist(g['links'], 6)}")
-            if g["tabs"]:
-                acts.append(f"tab {qlist([t for t, _ in g['tabs']], 10)}{_states_note(g['tabs'])}")
-            if acts:
-                add(f"Aksi yang tersedia di {what}: {'; '.join(acts)}.", (g["buttons"] or [(g["links"] or g["tabs"] or [("",)])[0]])[0][0]
-                    if g["buttons"] else (g["links"][0] if g["links"] else g["tabs"][0][0]), src)
-            if g["menus"]:
+                        add(f"{f['name']} wajib memenuhi aturan {q(h)}.", h, src)
+            for m in [m for m in g["messages"] if len(m.split()) >= 3 and m != hint][:8]:
+                aturan = _is_rule_text(m)  # teks biasa (sapaan/penjelasan) hanya jadi catatan, bukan aturan PRD
+                add(f"Berlaku aturan {q(m)}." if aturan else f"Di {what} tertulis {q(m)}.",
+                    m, src, "aturan" if aturan else "rincian")
+            if g["tabs"] and not mail:
+                add(f"Di {what} pengguna bisa berpindah tab {qlist([t for t, _ in g['tabs']], 10)}{_states_note(g['tabs'])}.",
+                    g["tabs"][0][0], src, "rincian")
+            if g["menus"] and not mail:
                 items = [m for m, _ in g["menus"]]
                 if len(items) <= 6:
-                    add(f"Menu di {what} berisi pilihan {qlist(items)}{_states_note(g['menus'])}.", items[0], src)
+                    add(f"Dari {what} pengguna bisa memilih {qlist(items)}{_states_note(g['menus'])}.", items[0], src)
                 else:
                     k2 = frozenset(guards.norm(x) for x in items)
-                    if not any(len(k2 & o) / len(k2 | o) >= 0.5 for o in nav_seen):  # menu navigasi yang sama cukup sekali
+                    if not any(len(k2 & o) / len(k2 | o) >= 0.5 for o in nav_seen):
                         nav_seen.add(k2)
-                        add(f"Menu navigasi berisi {qlist(items, 20)}.", items[0], src, fitur="Navigasi")
-            cols = list(g["columns"])
+                        add(f"Dari menu navigasi pengguna bisa membuka {qlist(items, 20)}.", items[0], src, "rincian",
+                            "Navigasi", alur=card)  # alur dipakai sebagai nama area di tabel Navigation Structure
+            cols = [] if mail else list(g["columns"])
             if cols:
-                add(f"Daftar di {what} menampilkan kolom {qlist(cols, 14)}.", cols[0], src)
-            if g["status"]:
-                add(f"Status yang ditampilkan di {what}: {qlist(g['status'], 10)}.", g["status"][0], src)
-            if not big:  # kalimat keterangan di layar kecil (modal, email, halaman info) biasanya berisi aturan
-                said = [t for t in g["texts"] if len(t.split()) >= 5][:6]
-                for t in said:
-                    add(f"Di {what} tertulis {q(t)}.", t, src)
+                add(f"{what[0].upper()}{what[1:]} menampilkan daftar dengan kolom {qlist(cols, 14)}.", cols[0], src, "rincian")
+            if g["status"] and not mail:  # status dirangkum di bagian Key State Model PRD
+                add(f"Status yang bisa muncul di {what}: {qlist(g['status'], 10)}.", g["status"][0], src, "rincian")
+            if not big:  # kalimat keterangan di layar kecil (modal, email, halaman info)
+                for t in [t for t in g["texts"] if len(t.split()) >= 5 and t != hint][:6]:
+                    add(f"Berlaku aturan {q(t)}." if _is_rule_text(t) else f"Di {what} tertulis {q(t)}.",
+                        t, src, "aturan" if _is_rule_text(t) else "rincian")
             prev = g
     return R
 

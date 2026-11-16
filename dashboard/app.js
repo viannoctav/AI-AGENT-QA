@@ -764,7 +764,7 @@ const FLOWS = [
       ["ai", "Baca per baris", "AI penulis mengambil setiap informasi beserta kutipan aslinya dari catatan."],
       ["code", "Penjaga anti-karangan", "Kode mengecek kutipan benar-benar ada di catatan, dan angka, role, serta status tidak dikarang. Yang gagal ditolak."],
       ["ai", "Baca ulang yang terlewat", "Baris catatan yang belum terbaca ditanyakan ulang sekali ke AI."],
-      ["code", "Kelompokkan per fitur", "Aturan disusun per fitur, beserta status dan tabel hak akses per role."],
+      ["code", "Kelompokkan per fitur", "Aturan disusun per fitur, beserta status dan tabel hak akses per role. Kalimat berbentuk langkah layar dirapikan menjadi aturan bisnis."],
       ["ai", "Cari yang belum jelas", "AI mendaftar hal yang bertentangan atau belum jelas untuk ditanyakan ke tim."],
       ["out", "PRD + catatan review", "PRD siap dipakai generator test case. Hal yang diragukan ada di catatan review (PDF) terpisah."],
     ],
@@ -776,7 +776,8 @@ const FLOWS = [
       ["code", "Potong layar & latar buram", "Papan alur dipotong per layar. Latar buram di belakang modal/panel dibuang supaya tidak ada yang bisa ditebak. Layar kembar dibaca sekali."],
       ["code", "Baca teks (pembaca teks Windows)", "Teks di layar dibaca persis dalam hitungan detik, termasuk salah ketik. Tidak bisa mengarang karena hanya membaca huruf yang ada."],
       ["ai", "Kenali jenis elemen", "AI melihat gambar dan hanya memberi jenis pada teks bernomor: tombol, field, label, placeholder, pesan, tabel. AI tidak bisa menambah teks baru. Layar dengan teks yang sama tidak ditanyakan dua kali, dan yang terlewat AI dilengkapi kode."],
-      ["code", "Susun alur bisnis", "Bingkai sampul di papan alur (mis. \"Users - Create\") menjadi nama alur. Tiap alur ditulis sebagai urutan langkah: layar, form dan isiannya, aturan isian, aksi, lalu notifikasi yang muncul. Layar yang sama tidak diulang."],
+      ["code", "Susun aturan bisnis", "Bingkai sampul di papan alur (mis. \"Users - Create\") menjadi nama alur, dan tiap alur menjadi sub-judul di dalam FR halamannya. Nama tombol diterjemahkan menjadi maksudnya: \"Pengguna dapat menambahkan user dengan mengisi A, B, C. Bila berhasil, sistem menampilkan notifikasi X\". Rincian isi layar dipindah ke catatan review."],
+      ["code", "Simpan per fitur", "Tiap fitur yang selesai langsung disimpan, jadi proses yang terhenti bisa dilanjut tanpa membaca ulang. Di akhir semua fitur digabung menjadi satu PRD."],
       ["ai", "Baca penjelasan", "Penjelasan QA diproses dengan penjaga kutipan yang sama seperti Catatan Konversi ke PRD."],
       ["out", "PRD + catatan review", "PRD siap dipakai generator test case. Hal yang perlu dikonfirmasi (mis. field abu-abu) ada di catatan review (PDF)."],
     ],
@@ -849,12 +850,7 @@ function orchestratorHtml(models, src) {
       <div class="oboxes">${boxes.map(([t, d, file, tag]) => `<div class="obox">
         <div class="fhead"><strong>${esc(t)}</strong>${tag === "now" ? `<span class="ftag tag-in">Dipakai sekarang</span>` : tag ? `<span class="ftag ${FLOW_TAG[tag][1]}">${esc(FLOW_TAG[tag][0])}</span>` : ""}</div>
         <p>${esc(d)}</p>${file ? `<span class="ofile mono">${esc(file)}</span>` : ""}</div>`).join("")}</div></li>`;
-  const node = (code, name, tag, desc) => `<li class="gnode"><div class="gbox">
-      <div class="fhead"><span class="mono gcode">${esc(code)}</span><strong>${esc(name)}</strong><span class="ftag ${FLOW_TAG[tag][1]}">${esc(FLOW_TAG[tag][0])}</span></div>
-      <p>${esc(desc)}</p></div></li>`;
   return `
-  <section class="card" aria-labelledby="orc-title">
-    <div class="card-head"><h2 id="orc-title">Siapa yang mengatur alurnya?</h2><span class="tiny muted">Orkestrator</span></div>
     <p class="small">Di TƎRᗩ, yang mengatur urutan langkah (<b>orkestrator</b>) adalah <b>kode program, bukan AI</b>. AI hanya dipanggil sebagai pekerja di langkah tertentu dan tidak bisa mengubah urutan, melewati pemeriksaan, atau menambah langkah. Karena itu alurnya selalu sama dan hasilnya bisa ditelusuri.</p>
     <ol class="olayers">
       ${layer(0, "Kamu", "Memilih fitur dan menekan tombol di dashboard (browser).", [["Dashboard TƎRᗩ", "Tampilan yang kamu pakai sekarang.", "dashboard/index.html, app.js"]])}
@@ -873,11 +869,17 @@ function orchestratorHtml(models, src) {
       ${layer(4, "Mesin AI", "Tempat model AI benar-benar dijalankan, sesuai Pengaturan > Sumber AI.", [
         ["Ollama di laptop ini", "Semua proses dan data tetap di laptop ini.", "", shared ? "" : "now"],
         ["Server AI bersama", "AI di komputer teman lewat Tailscale, wajib login. Dokumen tetap di laptop ini; server hanya menjalankan AI.", "ai_server/", shared ? "now" : ""]])}
-    </ol>
-  </section>
-  <section class="card" aria-labelledby="graph-title">
-    <div class="card-head"><h2 id="graph-title">Orkestrator Generator Test Case PRD (LangGraph)</h2><span class="tiny muted mono">tc_workflows/tc_graph.py</span></div>
-    <p class="small">LangGraph menjalankan langkah seperti diagram alur. Setelah setiap kelompok skenario diperiksa, ada <b>simpang keputusan</b> yang menentukan langkah berikutnya dengan aturan pasti, bukan tebakan AI.</p>
+    </ol>`;
+}
+
+
+/* ---------- diagram LangGraph khusus Generator Test Case PRD */
+function graphHtml() {
+  const node = (code, name, tag, desc) => `<li class="gnode"><div class="gbox">
+      <div class="fhead"><span class="mono gcode">${esc(code)}</span><strong>${esc(name)}</strong><span class="ftag ${FLOW_TAG[tag][1]}">${esc(FLOW_TAG[tag][0])}</span></div>
+      <p>${esc(desc)}</p></div></li>`;
+  return `
+    <p class="small"><span class="tiny muted mono">tc_workflows/tc_graph.py</span><br>LangGraph menjalankan langkah seperti diagram alur. Setelah setiap kelompok skenario diperiksa, ada <b>simpang keputusan</b> yang menentukan langkah berikutnya dengan aturan pasti, bukan tebakan AI.</p>
     <ol class="gflow">
       ${node("atomize", "Pecah aturan", "code", "PRD dipecah menjadi aturan kecil. AI hanya dipakai bila PRD tidak punya nomor FR/BR.")}
       ${node("design", "Rancang skenario", "mix", "Teknik uji dipilih: batas nilai, partisi, decision table, state transition. Skenario dimasukkan ke antrean.")}
@@ -898,8 +900,7 @@ function orchestratorHtml(models, src) {
       ${node("coverage", "Cek cakupan", "mix", "Memastikan setiap bagian PRD punya test case; yang belum ada dicatat di halaman Cakupan.")}
       ${node("export", "Buat Excel", "code", "Test case disusun menjadi file Excel siap unduh.")}
     </ol>
-    <p class="tiny muted">Yang menyalakan diagram ini: <span class="mono">run.py</span> (fungsi run_pipeline), dipanggil dashboard saat kamu klik Mulai buat test case.</p>
-  </section>`;
+    <p class="tiny muted">Yang menyalakan diagram ini: <span class="mono">run.py</span> (fungsi run_pipeline), dipanggil dashboard saat kamu klik Mulai buat test case.</p>`;
 }
 
 async function viewAlur() {
@@ -911,16 +912,32 @@ async function viewAlur() {
     models = { gen: by("penulis") || models.gen, judge: by("pemeriksa") || models.judge };
   } catch (e) { /* tanpa nama model pun diagram tetap tampil */ }
   const paused = S.flowPaused;
+  // satu alur ditampilkan sekali supaya halaman ini tidak jadi dinding panjang
+  const pick = FLOWS.find((f) => f.id === S.flowPick) || FLOWS[0];
+  const tab = (f) => `<button type="button" class="btn btn-small${f.id === pick.id ? " btn-primary" : ""}"
+      data-action="flow-pick" data-id="${esc(f.id)}" aria-pressed="${f.id === pick.id}">${esc(f.title)}</button>`;
   app.innerHTML = `
   <header class="page-head"><div><h1>Alur kerja TƎRᗩ</h1>
-    <p class="muted">Urutan proses yang terjadi di balik layar. Label <span class="ftag tag-ai">AI</span> berarti dikerjakan model AI di laptop ini, <span class="ftag tag-code">Kode</span> berarti aturan pasti yang dicek program (bukan tebakan AI).</p></div>
+    <p class="muted">Urutan proses yang terjadi di balik layar. Label <span class="ftag tag-ai">AI</span> berarti dikerjakan model AI, <span class="ftag tag-code">Kode</span> berarti aturan pasti yang dicek program (bukan tebakan AI).</p></div>
     <div class="actions"><button type="button" class="btn" data-action="flow-toggle">${paused ? "Putar animasi" : "Jeda animasi"}</button></div></header>
-  <div class="flows${paused ? " paused" : ""}" style="display:flex;flex-direction:column;gap:24px">
-    ${orchestratorHtml(models, src)}
-    <h2 class="sec-title">Langkah setiap fitur</h2>
-    <div class="grid grid-2">${FLOWS.map((f) => flowHtml(f, models)).join("")}</div>
-  </div>
-  <p class="small muted">Alur bisa disambung: hasil Catatan Konversi ke PRD dan Desain Konversi ke PRD bisa langsung dipakai di Generator Test Case PRD lewat tombol "Buat test case dari PRD ini", atau dijadikan PDF lewat tombol "Jadikan PDF"./p>`;
+
+  <section class="card">
+    <div class="card-head"><h2>Pilih fitur</h2><span class="tiny muted">Satu alur ditampilkan sekali supaya mudah dibaca</span></div>
+    <div class="actions" style="flex-wrap:wrap">${FLOWS.map(tab).join("")}</div>
+  </section>
+
+  <div class="flows${paused ? " paused" : ""}" style="margin-top:16px">${flowHtml(pick, models)}</div>
+
+  <p class="small muted" style="margin-top:12px">Alur bisa disambung: hasil Catatan Konversi ke PRD dan Desain Konversi ke PRD bisa langsung dipakai di Generator Test Case PRD lewat tombol "Buat test case dari PRD ini", atau dijadikan PDF lewat tombol "Jadikan PDF".</p>
+
+  <details class="fold card" style="margin-top:16px">
+    <summary>Siapa yang mengatur alurnya? (orkestrator)</summary>
+    <div class="flows${paused ? " paused" : ""}" style="margin-top:12px">${orchestratorHtml(models, src)}</div>
+  </details>
+  <details class="fold card" style="margin-top:12px">
+    <summary>Diagram orkestrator Generator Test Case PRD (LangGraph)</summary>
+    <div class="flows${paused ? " paused" : ""}" style="margin-top:12px">${graphHtml()}</div>
+  </details>`;
 }
 
 /* ================================================================= CATATAN QA -> PRD */
@@ -1089,6 +1106,9 @@ function designProgressHtml(d) {
   const phase = PHASES[g.P.phase] || "Memulai";
   const detail = g.P.phase === "kenali" ? ` — layar ${num(Math.min(g.sd + 1, g.st))} dari ${num(g.st)}` :
     g.P.phase === "penjelasan" ? ` — ${num(g.td + 1)} dari ${num(g.tt)}` : "";
+  const ct = g.P.cards_total || 0;
+  const fitur = ct > 1 ? `Fitur ${num(Math.min((g.P.cards_done || 0) + 1, ct))} dari ${num(ct)}` +
+    (g.P.card_name ? `: ${esc(g.P.card_name)}` : "") + ". Setiap fitur yang selesai langsung disimpan, jadi kalau prosesnya terhenti bisa dilanjut. " : "";
   const finish = new Date(Date.now() + g.remain * 1000).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
   return `<section class="card dprog" aria-labelledby="dp-h">
     <div class="dprog-head"><span class="spinner big" aria-hidden="true"></span>
@@ -1096,7 +1116,7 @@ function designProgressHtml(d) {
       <p class="small muted">Sudah berjalan <strong data-elapsed="${esc(String((d.started || 0)))}">${esc(fmtDur(elapsed))}</strong> · perkiraan sisa <strong>±${esc(fmtDur(g.remain))}</strong> (selesai sekitar ${esc(finish)})</p></div>
       <span class="dprog-pct">${g.pct}%</span></div>
     <div class="bar" role="progressbar" aria-label="Progres penyusunan PRD" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${g.pct}"><span style="width:${g.pct}%"></span></div>
-    <p class="tiny muted">${g.estimated ? `Rata-rata ${esc(fmtDur(g.avg))} per layar di laptop ini.` : "Perkiraan awal ±2,5 menit per layar; makin tepat setelah layar pertama selesai."} Laptop dijaga tidak tidur; jangan tutup layar laptop. Halaman ini boleh ditinggal, prosesnya tetap jalan.</p>
+    <p class="tiny muted">${fitur}${g.estimated ? `Rata-rata ${esc(fmtDur(g.avg))} per layar di laptop ini.` : "Perkiraan awal ±2,5 menit per layar; makin tepat setelah layar pertama selesai."} Laptop dijaga tidak tidur; jangan tutup layar laptop. Halaman ini boleh ditinggal, prosesnya tetap jalan.</p>
   </section>`;
 }
 
@@ -1128,16 +1148,28 @@ function cardHtml(c, i, n, disabled) {
     </div></section>`;
 }
 
+function resumeHtml(items) {
+  // proses yang mati/ditutup di tengah: fitur yang sudah selesai tersimpan, jadi bisa dilanjut tanpa dibaca ulang
+  return (items || []).map((x) => `<div class="banner" role="status">
+    <span><strong>Ada penyusunan PRD yang terhenti: ${esc(x.nama)}.</strong>
+    ${num(x.fitur_selesai)} dari ${num(x.fitur_total)} fitur sudah selesai dan tersimpan${x.fitur_berikut ? `, berikutnya "${esc(x.fitur_berikut)}"` : ""}.
+    Kalau dilanjut, fitur yang sudah selesai tidak dibaca ulang dan PRD-nya tetap satu.</span>
+    <span class="actions"><button type="button" class="btn btn-primary" data-action="design-resume" data-id="${esc(x.id)}">Lanjutkan</button>
+      <button type="button" class="btn" data-action="design-discard" data-id="${esc(x.id)}">Buang</button></span></div>`).join("");
+}
+
 async function viewDesain() {
   const d = await api("/api/design");
   const running = d.status === "berjalan";
   const res = d.status === "selesai" ? d.result : null;
+  const stuck = running || res ? [] : ((await api("/api/design/terhenti").catch(() => null)) || {}).items || [];
   const D = designState();
   const locked = running || !!res;
   app.innerHTML = `
   <header class="page-head"><div><p class="tiny muted">Konversi Dokumen</p><h1>Desain Konversi ke PRD</h1>
     <p class="muted">Unggah gambar desain per halaman atau fitur, tambahkan penjelasan bila ada. Teks di gambar dibaca oleh pembaca teks bawaan Windows (persis, termasuk salah ketik), AI hanya menentukan jenisnya: tombol, field, label, dan seterusnya. Hal yang diragukan masuk catatan review terpisah.</p></div></header>
   ${d.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Penyusunan gagal.</strong> ${esc(d.error || "")}</span></div>` : ""}
+  ${resumeHtml(stuck)}
   ${running ? `<div id="dz-prog">${designProgressHtml(d)}</div>` : ""}
   ${res ? "" : `
   <section class="card"><label class="field" for="dz-name">Nama modul
@@ -1243,6 +1275,22 @@ async function designStart() {
     await viewDesain();
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (e) { serverErr(e); }
+}
+
+async function designResume(id) {
+  try {
+    await api("/api/design/lanjut", { method: "POST", body: { id } });
+    await viewDesain();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (e) { serverErr(e); }
+}
+
+async function designDiscard(id) {
+  if (!confirm("Buang proses yang terhenti? Fitur yang sudah selesai dibaca ikut terhapus, jadi kalau nanti disusun lagi semuanya dibaca dari awal.")) return;
+  try {
+    await api("/api/design/buang", { method: "POST", body: { id } });
+    viewDesain();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function designReset() {
@@ -2311,6 +2359,8 @@ app.addEventListener("click", (ev) => {
   else if (a === "notes-reset") notesReset();
   else if (a === "design-reset") designReset();
   else if (a === "design-start") designStart();
+  else if (a === "design-resume") designResume(t.dataset.id);
+  else if (a === "design-discard") designDiscard(t.dataset.id);
   else if (a === "design-card-add") { const c = newCard(); designState().cards.push(c); S.cardJust = c.key; viewDesain().then(() => { S.cardJust = null; const n = document.getElementById(`dn-${c.key}`); if (n) n.focus({ preventScroll: true }); n && n.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }); }); }
   else if (a === "design-card-del") {
     const D = designState(); const key = Number(el.dataset.card);
@@ -2320,6 +2370,7 @@ app.addEventListener("click", (ev) => {
   }
   else if (a === "design-img-del") { const c = designCard(el.dataset.card); if (c) { c.images.splice(Number(el.dataset.img), 1); refreshDesignImgs(c); } }
   else if (a === "flow-toggle") { S.flowPaused = !S.flowPaused; viewAlur(); }
+  else if (a === "flow-pick") { S.flowPick = el.dataset.id; viewAlur(); }
   else if (a === "conv-delete") convDelete(el.dataset.conv, location.hash.startsWith("#riwayat"));
   else if (a === "conv-use") { S.mulaiPrd = el.dataset.file; location.hash = "#mulai"; }
   else if (a === "recheck") recheck(el);

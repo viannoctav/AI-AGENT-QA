@@ -103,9 +103,25 @@ Menu samping: klik **Konversi Dokumen** atau **Generator Test Case PRD** untuk m
 5. Klik **Susun PRD**. Perkiraan waktunya tampil di samping tombol (kira-kira 2–3 menit per layar di laptop tanpa GPU).
 6. Setelah selesai, sama seperti Catatan ke PRD: baca hal yang perlu dicek, unduh catatan review (PDF), edit PRD bila perlu, unduh PRD (.md) atau jadikan PDF bila perlu, lalu **Buat test case dari PRD ini**.
 
-PRD dari desain disusun **per alur bisnis**, bukan per elemen:
+**Diproses per fitur, hasilnya tetap satu PRD.** Kartu diproses satu demi satu (dibaca, dikenali AI, dicatat), dan **setiap fitur yang selesai langsung disimpan**. Di akhir semua fitur digabung menjadi **satu PRD** dengan nomor urut yang bersih (`FR-001` dan seterusnya, tabel Business Rules tidak kembar). Jadi:
+- Kalau laptop mati, TƎRᗩ ditutup, atau AI-nya putus di tengah, fitur yang sudah selesai **tidak dibaca ulang**. Buka lagi menu ini: ada tulisan *"Ada penyusunan PRD yang terhenti: ..."* beserta tombol **Lanjutkan** (meneruskan dari fitur berikutnya) dan **Buang** (hapus simpanannya, susun ulang dari awal).
+- Gambar yang kamu unggah disalin ke folder hasil sebelum diproses, jadi proses tetap bisa dilanjut walau gambar aslinya sudah kamu hapus.
+- Kalau nama atau penjelasan sebuah kartu kamu ubah, fitur itu dibaca ulang; fitur lain tetap memakai simpanannya.
+- Simpanan ini hanya untuk proses yang terhenti. Begitu PRD-nya jadi, simpanannya dibersihkan sendiri.
+
+PRD dari desain disusun **per alur bisnis**, bukan per elemen. Aturan bahasa bisnis ini juga berlaku untuk **Catatan Konversi ke PRD**: kalimat berbentuk langkah layar ("user klik tombol Simpan lalu muncul pesan Berhasil") otomatis diubah menjadi aturan ("Pengguna dapat menyimpan; bila berhasil sistem menampilkan pesan Berhasil."), setelah kalimat aslinya lolos penjaga kutipan.
 - Bingkai sampul di papan alur (bingkai yang hanya berisi judul dan tanggal, misalnya `Users - Create`) menjadi nama alur. Layar sesudahnya menjadi langkah alur itu.
-- Tiap alur ditulis sebagai urutan langkah (layar, form, notifikasi), lalu isi form, aturan isian (misalnya "Password must contain at least 8 characters"), aksi yang tersedia, dan notifikasi yang muncul setelah aksi.
+- Aturan ditulis sebagai **kalimat aturan bisnis**, bukan laporan isi layar: nama tombol diterjemahkan menjadi maksudnya (`Add user` → menambahkan user, `Save changes` di form `Edit user` → mengubah user). Contohnya: *Pengguna dapat menambahkan user dengan mengisi "Name", "Occupation", "Email", ... Bila berhasil, sistem menampilkan notifikasi "User added!".* Aturan yang berdiri sendiri tidak menyebut layar sama sekali: *New Password wajib memenuhi aturan "Password must contain at least 8 characters".*
+- Urutan layar tetap dicatat, tetapi **hanya satu baris per alur** (`Alur ini melewati ...`), bukan di setiap kalimat.
+- Aturan yang tertulis di desain ikut diambil apa adanya, misalnya "Password must contain at least 8 characters" atau "This password reset link will expire in 60 minutes".
+- **Satu halaman/area menjadi satu `FR`, tiap alur menjadi sub-judul di dalamnya** (mis. `FR-002 — Other - User` berisi **Users - Create**, **Users - Edit**, dan seterusnya). Sub-judul ini yang mengisi kolom **Sub Module/Menu** di test case, sedangkan kolom **Module/Menu** diisi nama area-nya.
+- Tiap `FR` ditutup **Acceptance Criteria** yang diambil dari hasil yang tertulis di alurnya sendiri, bukan dikarang.
+- Tombol batal/kembali dan mockup aplikasi email (mis. Gmail) hanya diambil isi emailnya, menu aplikasinya diabaikan.
+- **Rincian isi layar tidak masuk PRD**: aksi lain di layar, kolom tabel, menu navigasi, tab, daftar status, contoh isian, dan teks penjelasan/sapaan dipindah ke bagian *Rincian isi layar* di **catatan review**. PRD-nya berisi alur dan aturan saja, tetapi rinciannya tidak dibuang — kalau ada yang memang perlu diuji, salin sendiri dari catatan review.
+
+PRD yang dihasilkan (baik dari catatan maupun dari desain) memakai kerangka PRD yang biasa dipakai QA: Document Information, Actors, Feature Overview, **Navigation Structure** (tabel menu yang terlihat), **Functional Requirements** (`FR-001`, sub-judul per alur, ditutup Acceptance Criteria), **Business Rules** (tabel `BR-001` berisi aturan yang bisa langsung diuji), **Data & Field Reference** (tabel tiap field beserta keterangan dan contoh isian yang tertulis di sumber), **System Feedback & States** (tabel notifikasi beserta pemicunya), Key State Model, Edge-Case Areas, Expected QA Coverage, Test Data Guidance, Acceptance Criteria, dan **Open Points**.
+
+**Open Points** adalah bagian penting: hal yang tidak terlihat di sumber **tidak ditebak**, melainkan ditulis sebagai pertanyaan untuk PO/tim (misalnya "Tombol X tampak nonaktif di desain — kapan tombol ini bisa diklik?"). TƎRᗩ sengaja tidak menambahkan kebutuhan umum seperti "sistem harus memvalidasi format email" kalau aturan itu tidak tertulis di sumbernya, supaya tidak ada test case yang menguji hal yang belum tentu dibangun. Bagian lain yang tidak ada dasarnya di sumber juga tidak ditulis, jadi kalau desainmu tidak memuat aturan atau status, bagian itu memang kosong.
 - Layar yang sama (misalnya halaman daftar yang muncul di awal setiap alur) hanya dijelaskan sekali.
 - Supaya alurnya terbaca rapi, susun papan alur di Figma per skenario dan beri bingkai sampul di awal setiap skenario.
 
@@ -213,6 +229,8 @@ Keamanannya:
 
 File Server AI (`Server_AI_dan_Admin_Akun.bat` dan folder `ai_server\`) sengaja **tidak ikut naik ke GitHub**, jadi hanya ada di komputermu. Teman yang mengunduh TƎRᗩ dari GitHub tidak menerima halaman admin maupun servernya.
 
+> Karena tidak ada di GitHub, **salinan satu-satunya ada di komputermu**. Perintah Git yang membersihkan file di luar daftar Git (misalnya `git clean`, atau "discard/clean untracked files" di Visual Studio) bisa menghapusnya. Simpan cadangan folder `ai_server\` dan file `Server_AI_dan_Admin_Akun.bat` di luar folder TƎRᗩ. Akun teman-teman aman di `data\server_ai\` dan tidak ikut terhapus. Fitur Perbarui tidak pernah menyentuh keduanya.
+
 1. Pasang TƎRᗩ seperti biasa (pilihan **1**).
 2. Pasang Tailscale dari <https://tailscale.com/download>, lalu masuk.
 3. Klik dua kali **`Server_AI_dan_Admin_Akun.bat`**. Pertama kali Windows meminta izin admin untuk membuka pintu firewall khusus jaringan Tailscale: klik **Yes**.
@@ -306,12 +324,20 @@ File Excel di `knowledge\company_testcases\` adalah contoh test case perusahaan 
 2. Buka **Pengaturan** > **Referensi test case perusahaan** > **Kunci dengan password**, isi password dua kali, lalu **Kunci file**.
 3. File `.xlsx` berubah menjadi `.xlsx.terakunci`. Hanya versi terkunci ini (dan `kunci.json`, yang bukan rahasia) yang ikut naik ke GitHub; file `.xlsx` biasa di folder itu tidak akan ikut naik lagi.
 
-Di laptopmu kuncinya langsung tersimpan, jadi TƎRᗩ tetap memakai referensi itu. Di laptop teman, referensi baru dipakai setelah teman mengisi password yang sama di Pengaturan (**Isi password**). Tanpa password, test case tetap bisa dibuat, hanya tanpa contoh gaya penulisan perusahaan.
+Di laptopmu kuncinya langsung tersimpan, jadi TƎRᗩ tetap memakai referensi itu.
+
+Di laptop teman, caranya (cukup sekali per laptop):
+
+1. Buka **Pengaturan** > **Referensi test case perusahaan** > **Isi password**.
+2. Ketik password yang kamu berikan, lalu **Simpan**. Kuncinya tersimpan di laptop itu (`configs\kunci_referensi.json`, tidak ikut ke GitHub).
+
+Tanpa password, test case tetap bisa dibuat, hanya tanpa contoh gaya penulisan perusahaan, dan di **Mulai baru** muncul keterangan "Referensi test case perusahaan terkunci". Kirim passwordnya lewat chat pribadi, jangan ditulis di README atau di repo.
 
 Yang perlu diketahui:
 - Kalau password lupa, file terkunci tidak bisa dibuka oleh siapa pun. Karena itu simpan salinan aslinya.
 - Siapa pun yang kamu beri password bisa memakai (dan pada akhirnya membaca) isinya. Beri hanya ke orang yang memang boleh.
 - File asli yang **sudah pernah** naik ke GitHub masih ada di riwayat Git lama. Mengunci tidak menghapus riwayat itu.
+- Teman yang sudah terlanjur menerima file `.xlsx` versi lama akan tetap memakai file itu, bukan versi terkuncinya. Minta mereka menghapus file `.xlsx` di `knowledge\company_testcases\`.
 - **Buka kunci permanen** mengembalikan file menjadi `.xlsx` biasa.
 
 ---

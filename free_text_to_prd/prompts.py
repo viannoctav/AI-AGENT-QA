@@ -25,6 +25,13 @@ Untuk setiap item isi:
 - pernyataan: SATU kalimat requirement yang jelas dalam bahasa catatan. Pertahankan istilah, nama field, nama role,
   nama status, dan angka PERSIS seperti di catatan (jangan diterjemahkan). Perbaiki salah ketik yang jelas saja.
   Pola: "X wajib diisi", "Panjang X 8-12 karakter", "Role Y dapat melakukan Z", "Role Y tidak dapat melakukan Z".
+  WAJIB ditulis sebagai ATURAN BISNIS: subjek (pengguna/role/sistem) + dapat / harus / tidak dapat / tidak boleh +
+  apa yang terjadi. DILARANG menulis langkah memakai layar sebagai inti kalimat ("pengguna klik tombol X",
+  "buka halaman Y lalu tekan Z"). Bila catatan berbentuk langkah layar, ubah menjadi kemampuan dan akibatnya,
+  nama tombol/layar boleh disebut sebagai keterangan saja. Contoh perubahan:
+  "user klik tombol Simpan lalu muncul pesan Berhasil" -> "Pengguna dapat menyimpan data; bila berhasil sistem
+  menampilkan pesan \\"Berhasil\\"."; "di halaman Daftar ada tombol Export" -> "Pengguna dapat mengekspor data dari
+  halaman Daftar."; "kalau salah 3x akun kekunci" -> "Akun terkunci setelah 3 kali percobaan gagal."
 - khusus jenis "akses": role (nama role persis), aksi (apa yang dilakukan/dilihat, singkat), boleh (true/false),
   lingkup (data siapa yang boleh dilihat/diolah, bila disebut; selain itu "").
 - khusus jenis "status": objek (apa yang berubah status), dari, ke (nama tahap persis), pemicu (bila disebut; selain itu "").

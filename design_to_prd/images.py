@@ -236,6 +236,7 @@ def prepare(images: List[Dict[str, Any]], out_dir: Path, seen: Optional[Dict[str
             p = out_dir / f"{sid}.png"
             crop.save(p)
             screens.append({"id": sid, "image": img["name"], "order": i, "of": len(boxes), "path": str(p),
-                            "focused": bool(fb), "size": list(crop.size), "duplicate_of": seen.get(digest)})
+                            "focused": bool(fb), "size": list(crop.size), "duplicate_of": seen.get(digest),
+                            "digest": digest})  # digest disimpan supaya layar kembar tetap dikenali saat proses dilanjut
             seen.setdefault(digest, sid)
     return screens
