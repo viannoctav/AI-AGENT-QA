@@ -416,6 +416,9 @@ def _run(cards, extra, name, llm, ocr_fn, clean_lines, cb, out_dir, t0, P, write
     features += list(text_feats.values())
     doc["features"] = features
     td, td_seen = [], set()  # contoh isian yang benar-benar tertulis di desain -> panduan data uji
+    # nama layar atau nama alur kadang terbaca sebagai nama field; jangan dipakai sebagai nama field data uji
+    bukan_field = {guards.norm(scr.screen_name(sm)) for sm in summaries} | {guards.norm(c["nama"]) for c in cards}
+    bukan_field.discard("")
     for sm in summaries:
         if sm.get("dup"):
             continue
@@ -423,7 +426,7 @@ def _run(cards, extra, name, llm, ocr_fn, clean_lines, cb, out_dir, t0, P, write
             ex = (f.get("placeholder") or "").strip()
             nm = (f.get("name") or "").strip()
             k = guards.norm(nm)
-            if not ex or not nm or k in td_seen or guards.norm(ex) == k or len(ex) > 80:
+            if not ex or not nm or k in td_seen or guards.norm(ex) == k or len(ex) > 80 or k in bukan_field:
                 continue
             if not re.search(r"@|\d|\b(e\.?g\.?|contoh|mis\.)", ex, re.I):
                 continue  # "Select a role", "Search customer": petunjuk, bukan contoh data

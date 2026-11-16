@@ -230,7 +230,7 @@ def md_file_error(name, content) -> str:
     return ""
 
 
-# ----------------------------------------------------------------------------- Bandingkan test case
+# ----------------------------------------------------------------------------- Gabungkan test case
 COMPARE_EXT = ("xlsx", "json")
 COMPARE_MAX_BYTES = 20 * 1024 * 1024
 LABEL_MIN, LABEL_MAX = 1, 30

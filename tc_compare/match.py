@@ -48,6 +48,9 @@ def prepare(tcs: List[Dict[str, Any]]) -> None:
         t["_sub"] = set(T.tokens(t.get("sub") or t.get("module")))
         t["_dv"] = T.data_values(t.get("data"))
         t["_out"] = T.outcome(t.get("expected"), t.get("category"))
+        # hasil harapan dibaca juga tanpa melihat kolom Positive/Negative: dua test case bisa sama-sama
+        # ditandai Negative tetapi hasil harapannya berlawanan
+        t["_outx"] = T.outcome(t.get("expected"))
         t["_key"] = " ".join(t["_t"]) + "#" + T.data_key(t.get("data")) + "#" + " ".join(t["_e"])
         t["_emb_text"] = f"{t.get('sub') or ''}. {t.get('title') or ''}. Data: {t.get('data') or '-'}. " \
                          f"Hasil: {t.get('expected') or '-'}"[:1500]
@@ -82,7 +85,9 @@ class Scorer:
 
 
 def _opposite(x, y) -> bool:
-    return bool(x["_out"] and y["_out"] and x["_out"] != y["_out"])
+    if x["_out"] and y["_out"] and x["_out"] != y["_out"]:
+        return True
+    return bool(x.get("_outx") and y.get("_outx") and x["_outx"] != y["_outx"])
 
 
 # ----------------------------------------------------------------------------- lapis 2-5: putuskan dengan kode

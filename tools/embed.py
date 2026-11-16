@@ -1,4 +1,4 @@
-"""Model embedding (kemiripan makna) lewat Ollama: dipakai Bandingkan test case.
+"""Model embedding (kemiripan makna) lewat Ollama: dipakai Gabungkan test case.
 Jauh lebih ringan dari AI chat: ratusan test case selesai dalam sekitar satu menit di laptop tanpa GPU."""
 from typing import Callable, List, Optional
 

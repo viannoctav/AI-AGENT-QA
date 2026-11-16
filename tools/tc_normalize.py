@@ -66,8 +66,13 @@ def format_test_data(value: Any) -> str:
     return str(value or "").strip()
 
 
+# judul test case menguji fitur, bukan "alur": "Verifikasi alur keluar aplikasi" -> "Verifikasi keluar aplikasi"
+_ALUR = re.compile(r"\b(alur|flow)\s+(?=\S)", re.I)
+
+
 def clean_title(title: str, keep: Set[int]) -> str:
     t = _LEAK.sub("", title or "").strip()
+    t = _ALUR.sub("", t).strip()
     t = _COMBO.sub("", t).strip()
     m = _TRAIL_NUM.search(t)
     if m and int(m.group(1)) not in keep:

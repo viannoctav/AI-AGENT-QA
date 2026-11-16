@@ -193,9 +193,13 @@ _SQUOTED = re.compile(r"(?<![\w])'([^'\n]{3,})'(?![\w])")
 _QUOTED = re.compile(r'["\u201c]([^"\u201c\u201d]{3,})["\u201d]')
 
 
+# judul menguji fitur, bukan "alur": "Verifikasi alur keluar aplikasi" -> "Verifikasi keluar aplikasi"
+_ALUR_JUDUL = re.compile(r"\b(alur|flow)\s+(?=\S)", re.IGNORECASE)
+
+
 def clean_title(title: str) -> str:
-    """Buang ID requirement dari judul (ID ada di kolom traceability, bukan di judul)."""
-    t = str(title or "")
+    """Buang ID requirement dan kata "alur" dari judul (ID ada di kolom traceability, bukan di judul)."""
+    t = _ALUR_JUDUL.sub("", str(title or ""))
     t = re.sub(rf"\s*\(\s*(?:{_ID}\s*[,/&]?\s*)+\)", "", t)
     t = re.sub(rf"\b(?:sesuai|dengan|untuk|pada)\s+requirement\s+{_ID}\b", "", t, flags=re.IGNORECASE)
     t = re.sub(rf"\b(?:untuk|pada|sesuai)\s+{_ID}\s*:?", "", t, flags=re.IGNORECASE)

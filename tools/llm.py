@@ -11,6 +11,8 @@ _DEFAULTS: Dict[str, Any] = {
     "batch_size": 5, "max_attempts": 2, "judge_enabled": True, "generation_model": None,
     "judge_model": None, "num_predict": 3500, "temperature": 0.2, "judge_batch": 6,
     "max_obligations": None, "output_suffix": "_v2",
+    # "lengkap" = PRD ditulis manusia (bawaan); "desain" = PRD hasil konversi desain, dipilih di Mulai baru
+    "prd_kind": "lengkap",
     "dedup": True, "dedup_threshold": 0.95, "num_ctx": 8192, "think": False, "judge_scope": "auto", "judge_timing": "akhir", "auto_model": "", "auto_model_kinds": ["decision", "edge", "whitespace"],
     "priority_rule": {"Positive": "High", "Negative": "Medium"},
 }

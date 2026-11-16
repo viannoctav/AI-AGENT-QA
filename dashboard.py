@@ -561,7 +561,7 @@ def _worker(run_id, prd_file, overrides):
 
 def start_run(body):
     if COMPARE["status"] == "berjalan":
-        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
+        raise ApiError(409, "Gabungkan test case masih berjalan. Tunggu sampai selesai.")
     if NOTES["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD dari catatan masih berjalan. Tunggu sampai selesai.")
     if DESIGN["status"] == "berjalan":
@@ -599,6 +599,8 @@ def start_run(body):
         if not (PRD_DIR / prd).is_file() or not prd.endswith(".md"):
             raise ApiError(400, "Dokumen PRD tidak ditemukan")
         overrides = {}
+        if str(body.get("prd_kind") or "") == "desain":
+            overrides["prd_kind"] = "desain"
         if cap:
             overrides["max_obligations"] = cap
         if body.get("no_judge"):
@@ -607,6 +609,7 @@ def start_run(body):
         d = RUNS / run_id
         d.mkdir(parents=True)
         info = {"id": run_id, "prd": prd, "prd_title": prd_title(PRD_DIR / prd), "status": "berjalan",
+                "prd_kind": overrides.get("prd_kind", "lengkap"),
                 "started": time.time(), "finished": None, "overrides": overrides, "models": {},
                 "progress": {}, "report": {}}
         write_json(d / "run.json", info)
@@ -752,7 +755,7 @@ def start_notes(body):
     if DESIGN["status"] == "berjalan":
         raise ApiError(409, "Penyusunan PRD dari desain masih berjalan. Tunggu sampai selesai.")
     if COMPARE["status"] == "berjalan":
-        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
+        raise ApiError(409, "Gabungkan test case masih berjalan. Tunggu sampai selesai.")
     require_ai()
     NOTES.update({"status": "berjalan", "log": [], "result": None, "error": None,
                   "started": time.time(), "finished": None, "name": name})
@@ -974,7 +977,7 @@ def _design_busy_check():
     if NOTES["status"] == "berjalan" or DESIGN["status"] == "berjalan":
         raise ApiError(409, "Masih ada penyusunan PRD yang berjalan. Tunggu sampai selesai.")
     if COMPARE["status"] == "berjalan":
-        raise ApiError(409, "Bandingkan test case masih berjalan. Tunggu sampai selesai.")
+        raise ApiError(409, "Gabungkan test case masih berjalan. Tunggu sampai selesai.")
 
 
 def start_design(body):
@@ -1065,7 +1068,7 @@ def save_prd(name, body):
     return {"file": f.name, "title": prd_title(f)}
 
 
-# ----------------------------------------------------------------------------- Bandingkan test case
+# ----------------------------------------------------------------------------- Gabungkan test case
 COMPARE = {"status": "idle", "log": [], "result": None, "error": None, "started": None, "finished": None,
            "progress": {}, "name": None, "mode": None}
 COMPARE_DIR = ROOT / "outputs" / "tc_compare"
@@ -1182,15 +1185,15 @@ def _compare_worker(a, b, mode, name, use_embed):
 
 def start_compare(body):
     if _busy():
-        raise ApiError(409, "Masih ada proses lain yang berjalan. Bandingkan test case setelah proses itu selesai.")
+        raise ApiError(409, "Masih ada proses lain yang berjalan. Gabungkan test case setelah proses itu selesai.")
     raw_name = str(body.get("name") or "").strip()
     if raw_name:
-        err = FR.name_error(raw_name, "Nama perbandingan")
+        err = FR.name_error(raw_name, "Nama gabungan")
         if err:
             raise ApiError(400, err, "cmp-name")
     mode = body.get("mode") if body.get("mode") in ("lengkap", "cepat") else None
     if not mode:
-        raise ApiError(400, "Pilih mode perbandingan.", "cmp-mode")
+        raise ApiError(400, "Pilih mode penggabungan.", "cmp-mode")
     a = _compare_side(body.get("a"), "a")
     b = _compare_side(body.get("b"), "b")
     if a["key"] == b["key"]:
@@ -1238,7 +1241,8 @@ def list_compares():
             meta = read_json(d / "analysis_metadata.json") if d.is_dir() else None
             if meta:
                 out.append({"id": d.name, "name": meta.get("name"), "time": meta.get("time"), "mode": meta.get("mode"),
-                            "labels": meta.get("labels"), "stats": meta.get("stats"), "xlsx_file": meta.get("xlsx_file")})
+                            "labels": meta.get("labels"), "stats": meta.get("stats"), "xlsx_file": meta.get("xlsx_file"),
+                            "merge_file": meta.get("merge_file"), "merge_stats": meta.get("merge_stats")})
     return sorted(out, key=lambda m: m.get("time") or 0, reverse=True)
 
 
@@ -1537,11 +1541,12 @@ class Handler(BaseHTTPRequestHandler):
                 info = read_json(d / "run.json", {})
                 stem = Path(info.get("prd", "hasil")).stem
                 return self.send_file(f, f"{stem}_{m.group(2)}")
-            m = re.fullmatch(r"/api/compares/([^/]+)/xlsx", path)
+            m = re.fullmatch(r"/api/compares/([^/]+)/(xlsx|gabungan)", path)
             if method == "GET" and m:
                 d = _compare_dir(unquote(m.group(1)))
                 meta = read_json(d / "analysis_metadata.json") or {}
-                f = d / Path(meta.get("xlsx_file") or "").name
+                kunci = "merge_file" if m.group(2) == "gabungan" else "xlsx_file"
+                f = d / Path(meta.get(kunci) or "").name
                 if not f.is_file():
                     raise ApiError(404, "File Excel tidak ditemukan")
                 return self.send_file(f, f.name)

@@ -11,12 +11,19 @@ Setiap rilis: ubah angka di file `VERSION`, lalu tulis perubahannya paling atas 
 ## 1.3.0 — 14 November 2026
 
 ### Baru
+- **Bandingkan Test Case menjadi Gabungkan Test Case.** Mesin pencocokannya tetap sama (kode, kemiripan makna, AI hanya untuk yang ragu), tetapi hasil utamanya sekarang **satu file test case gabungan**: pasangan yang sama diambil satu dari kumpulan A, yang cuma mirip disimpan dua-duanya dan diberi tanda, yang bertentangan ditandai jelas, dan test case kembar dibuang. File-nya memakai template test case biasa plus kolom Asal dan Catatan gabung. Laporan perbandingan lama tetap ada di bagian Rincian perbandingan.
+- Dua test case yang sama-sama ditandai Negative tetapi hasil harapannya berlawanan kini ikut terdeteksi sebagai bertentangan.
 - Pembaruan dari GitHub: TƎRᗩ memberi tahu bila ada versi baru dan bisa memperbarui dirinya lewat tombol Perbarui sekarang atau file Perbarui_Tera.bat. Hasil kerja, dokumen PRD, akun, dan pengaturan tidak diubah; file program lama dicadangkan.
 - Kunci file referensi test case perusahaan dengan password (Pengaturan). Yang ikut ke GitHub hanya versi terkunci.
 - Riwayat mencatat semua proses dari setiap menu, termasuk MD ke PDF (PDF bisa diunduh lagi) dan perbandingan test case.
 - Bandingkan Test Case menjadi menu sendiri di sisi kiri.
 
 ### Perbaikan
+- Contoh Test Data di instruksi AI memakai field yang sedang ditulis (bila PRD tidak memuat contohnya, dipakai nilai menurut jenis field: email, nomor telepon, password, tanggal, angka), bukan contoh pertama yang kebetulan ada. Nama layar atau nama alur yang terbaca sebagai nama field juga tidak lagi ikut ke panduan data uji.
+- Kolom **Test Data** tidak lagi berisi isian pengganti. Contoh di instruksi AI dulu memakai teks pengganti di dalam tanda kurung siku, dan model kecil menyalinnya mentah-mentah (64% baris pada percobaan terakhir). Contohnya sekarang memakai nilai sungguhan dari bagian Test Data Guidance pada PRD, dan penulisan isian pengganti dilarang.
+- Nama tombol asli kembali ditulis di PRD dari desain ("... lalu menekan tombol \"Login\""), supaya langkah uji memakai tombol yang benar-benar ada, bukan terjemahannya.
+- Baris urutan layar ("Alur ini melewati ...") ditulis miring sebagai konteks, jadi tidak lagi berubah menjadi test case campur aduk.
+- **Mulai baru** punya pilihan **Jenis PRD**: PRD lengkap (ditulis manusia) atau PRD hasil konversi desain. Pada pilihan kedua, AI dilarang menambah aturan yang tidak tertulis di desain dan wajib memakai nama tombol serta kolom persis seperti tertulis.
 - PRD (dari desain maupun dari catatan) ditulis sebagai **aturan bisnis**: subjek + dapat/harus/tidak boleh + akibatnya. Nama tombol diterjemahkan ke maksudnya ("Add user" -> "Pengguna dapat menambahkan user"), aturan isian tidak lagi menyebut nama form, dan urutan layar hanya ditulis satu baris per alur. Di Catatan ke PRD, kalimat berbentuk langkah layar dirapikan setelah lolos penjaga kutipan, jadi penjaganya tetap menilai kalimat asli.
 - PRD dari desain ditulis sebagai kalimat kebutuhan yang mengalir, bukan daftar template. Isian, tombol, dan hasilnya digabung jadi satu kalimat ("Pada form "Add user" yang bertuliskan "Add a new user account", pengguna mengisi "Name", "Occupation", ..., lalu menekan "Add user". Setelah itu sistem menampilkan notifikasi "User added!"."). Satu `FR` per halaman/area dengan sub-judul per alur, sehingga kolom Module/Menu dan Sub Module/Menu di test case terisi benar.
 - PRD mendapat bagian baru: Navigation Structure, Data & Field Reference, System Feedback & States, Acceptance Criteria per FR, dan Open Points (hal yang tidak terlihat di sumber ditulis sebagai pertanyaan untuk PO, bukan ditebak).

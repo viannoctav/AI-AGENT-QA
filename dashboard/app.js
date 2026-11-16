@@ -690,6 +690,13 @@ async function viewMulai() {
         ${prds.length ? `<button type="button" class="btn" data-action="prd-del" ${pf.active_run ? "disabled" : ""}>Hapus dokumen ini</button>` : ""}
         <input type="file" id="prd-file" accept=".md" hidden></div>
       <p class="tiny muted">Daftar ini dibaca langsung dari folder <span class="mono">knowledge\prd</span>: file yang dihapus atau dipindah dari folder itu otomatis hilang dari daftar.</p>
+      <label class="field" for="prd-kind">Jenis PRD
+        <select id="prd-kind" name="prd_kind">
+          <option value="lengkap">PRD lengkap (ditulis manusia)</option>
+          <option value="desain">PRD hasil konversi desain</option>
+        </select>
+        <span class="hint">PRD hasil konversi desain hanya memuat yang terlihat di layar. Dengan pilihan ini, AI dilarang menambah aturan yang tidak tertulis (validasi format, penguncian akun, hak akses) dan wajib memakai nama tombol serta kolom persis seperti di desain.</span>
+      </label>
       <div class="actions" style="padding-top:4px">
         <button type="button" class="btn btn-primary" data-action="start" ${pf.ready ? "" : "disabled"}>Mulai buat test case</button>
         <span class="small muted" id="estimate">${esc(chosen ? estimate(chosen) : "")}</span></div>
@@ -741,12 +748,13 @@ async function uploadPrd(file) {
 async function startRun() {
   const sel = document.getElementById("prd-select");
   const prd = (sel || {}).value;
+  const kind = (document.getElementById("prd-kind") || {}).value || "lengkap";
   if (!prd) return report([[sel || document.getElementById("prd-empty"), "Pilih dokumen PRD dulu, atau tambahkan file PRD (.md)."]]);
   const btn = document.querySelector('[data-action="start"]');
   btn.disabled = true;
   btn.textContent = "Memulai...";
   try {
-    await api("/api/runs", { method: "POST", body: { prd } });
+    await api("/api/runs", { method: "POST", body: { prd, prd_kind: kind } });
     location.hash = "#berjalan";
   } catch (e) {
     serverErr(e);
@@ -783,14 +791,15 @@ const FLOWS = [
     ],
   },
   {
-    id: "banding", title: "Bandingkan Test Case", note: "Menu sendiri",
+    id: "banding", title: "Gabungkan Test Case", note: "Menu sendiri",
     steps: [
       ["in", "Test case A dan B", "Dua kumpulan test case dari Riwayat atau file Excel/JSON, mis. hasil dari desain dan dari PRD."],
       ["code", "Rapikan & kembar persis", "Kata pembuka dibuang, kata bermakna sama disamakan (tampil = muncul = displayed). Yang isinya sama persis langsung jadi Sama."],
       ["code", "Skor kemiripan & bertentangan", "Dibandingkan per Sub Module: judul, Test Data, hasil harapan. Data sama tapi hasil berlawanan langsung ditandai Bertentangan."],
       ["ai", "Kemiripan makna", "Model embedding (ringan) menangkap kalimat beda kata tetapi sama maksud. Bukan AI chat, jadi cepat."],
       ["ai", "AI untuk yang ragu", "AI penulis hanya menilai pasangan yang masih ragu, beberapa sekaligus, dengan status yang sudah ditentukan. Mode cepat melewati langkah ini."],
-      ["out", "Laporan perbandingan", "Berpasangan, Hanya di A, Hanya di B, Bertentangan, Kembar, Perlu dicek, kesimpulan, dan Excel."],
+      ["code", "Gabungkan", "Pasangan yang sama diambil satu (dari kumpulan A), yang cuma mirip disimpan dua-duanya dan diberi tanda, yang bertentangan ditandai jelas, yang cuma ada di satu sisi ikut masuk, dan test case kembar dibuang."],
+      ["out", "Excel test case gabungan", "Satu file dengan template test case biasa, ditambah kolom Asal dan Catatan gabung. Laporan perbandingan (Berpasangan, Hanya di A, Hanya di B, Bertentangan, Kembar) tetap bisa diunduh terpisah."],
     ],
   },
   {
@@ -859,7 +868,7 @@ function orchestratorHtml(models, src) {
         ["Generator Test Case PRD", "Diatur LangGraph: diagram langkah dengan simpang keputusan (lihat di bawah).", "tc_workflows/tc_graph.py", "code"],
         ["Catatan Konversi ke PRD", "Langkah berurutan: baca per baris, penjaga anti-karangan, susun per fitur, simpan.", "free_text_to_prd/pipeline.py", "code"],
         ["Desain Konversi ke PRD", "Langkah berurutan: potong layar, baca teks, kenali elemen, susun PRD, simpan.", "design_to_prd/pipeline.py", "code"],
-        ["Bandingkan test case", "Saringan bertingkat: kode dulu, lalu kemiripan makna, AI chat hanya untuk pasangan yang ragu.", "tc_compare/pipeline.py", "code"],
+        ["Gabungkan test case", "Saringan bertingkat (kode, kemiripan makna, AI untuk yang ragu), lalu kedua kumpulan disatukan jadi satu file.", "tc_compare/pipeline.py", "code"],
         ["MD Konversi ke PDF", "Satu langkah tanpa AI, jadi tidak butuh orkestrator.", "tools/md_pdf.py", "code"]])}
       ${layer(3, "Pekerja", "Dipanggil orkestrator untuk mengerjakan satu tugas, lalu hasilnya dicek lagi oleh kode.", [
         ["AI penulis", `Menulis test case, mengambil aturan dari catatan, mengenali jenis elemen desain. (${models.gen})`, "agents/, tools/llm.py", "ai"],
@@ -1652,7 +1661,7 @@ async function viewRiwayat() {
     ...pdfs.map((c) => ({ kind: "pdf", t: c.time || 0, c })),
   ].sort((x, y) => y.t - x.t);
   const cmpRow = (c) => { const st = c.stats || {}, l = c.labels || {}; return `<tr>
-    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip info">Bandingkan TC</span></td><td>${esc(c.name)}</td>
+    <td></td><td class="num nw">${esc(fmtDate(c.time))}</td><td class="nw"><span class="chip info">Gabungkan TC</span></td><td>${esc(c.name)}</td>
     <td>${esc(l.a)} ${esc(pctTxt(st.a_coverage))} dan ${esc(l.b)} ${esc(pctTxt(st.b_coverage))} berpasangan, ${num(st.bertentangan)} bertentangan, ${num(st.perlu_dicek)} perlu dicek</td>
     <td class="r">${esc(fmtDur(st.seconds))}</td><td>${statusChip("selesai")}</td>
     <td><span class="actions"><a class="btn btn-small" href="#banding/${encodeURIComponent(c.id)}">Lihat hasil</a>
@@ -1681,7 +1690,7 @@ async function viewRiwayat() {
       ${c.prd_exists ? `<button type="button" class="btn btn-small" data-action="conv-use" data-file="${esc(c.prd_file)}">Buat test case</button>` : ""}
       <button type="button" class="btn btn-small" data-action="conv-delete" data-conv="${esc(c.id)}">Hapus</button></span></td></tr>`;
   app.innerHTML = `
-  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini beserta hasilnya (pembuatan test case, konversi catatan, konversi desain, MD ke PDF, dan perbandingan test case), terbaru di atas.</p></div>
+  <header class="page-head"><div><h1>Riwayat</h1><p class="muted">Semua proses di laptop ini beserta hasilnya (pembuatan test case, konversi catatan, konversi desain, MD ke PDF, dan penggabungan test case), terbaru di atas.</p></div>
     <div class="actions"><button type="button" class="btn" data-action="compare">Bandingkan angka 2 proses yang dipilih</button></div></header>
   <section class="card hist">
     ${rows.length ? `<div class="table-wrap"><table style="min-width:980px"><thead><tr>
@@ -1740,7 +1749,7 @@ async function deleteRun(id) {
    dan AI chat hanya untuk pasangan yang masih ragu. */
 const CMP_STATUS = { sama: ["Sama", "ok"], berkaitan: ["Berkaitan", "info"], sebagian: ["Sebagian", "brand"], bertentangan: ["Bertentangan", "err"], perlu_dicek: ["Perlu dicek", ""], berbeda: ["Berbeda", "grey"] };
 const CMP_BY = { kode: "Kode", makna: "Kode + kemiripan makna", ai: "AI", mode_cepat: "Kode (mode cepat)" };
-const CMP_PHASE = { rapikan: "Merapikan teks test case", makna: "Menghitung kemiripan makna", cocokkan: "Mencocokkan test case", ai: "AI menilai pasangan yang ragu", simpulkan: "Menyusun kesimpulan", selesai: "Selesai" };
+const CMP_PHASE = { rapikan: "Merapikan teks test case", makna: "Menghitung kemiripan makna", cocokkan: "Mencocokkan test case", ai: "AI menilai pasangan yang ragu", simpulkan: "Menggabungkan dan menyusun kesimpulan", selesai: "Selesai" };
 
 function cmpState() {
   S.cmp = S.cmp || { a: { kind: "run", id: "", label: "Kumpulan A", file: null }, b: { kind: "run", id: "", label: "Kumpulan B", file: null }, mode: "lengkap", name: "" };
@@ -1792,7 +1801,7 @@ function cmpProgressHtml(d) {
       <div><h2 id="cp-h">${esc(CMP_PHASE[P.phase] || "Memulai")}${esc(detail)}</h2>
       <p class="small muted">Sudah berjalan <strong>${esc(fmtDur(el))}</strong>${remain != null ? ` · perkiraan sisa <strong>±${esc(fmtDur(remain))}</strong>` : ""}</p></div>
       <span class="dprog-pct">${pctv}%</span></div>
-    <div class="bar" role="progressbar" aria-label="Progres perbandingan" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pctv}"><span style="width:${pctv}%"></span></div>
+    <div class="bar" role="progressbar" aria-label="Progres penggabungan" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pctv}"><span style="width:${pctv}%"></span></div>
     <p class="tiny muted">${P.phase === "ai" ? "AI hanya menilai pasangan yang masih ragu; sisanya sudah diputuskan kode. " : ""}Halaman ini boleh ditinggal, prosesnya tetap jalan.</p>
   </section>`;
 }
@@ -1831,20 +1840,29 @@ function cmpResultHtml(r, saved) {
   }
   const limit = S.cmpLimit || 100, shown = rows.slice(0, limit);
   const c = r.conclusion || {};
+  const m = (r.merge || {}).stats || {};
   return `
   <section class="card" aria-labelledby="cr-h">
     <div class="card-head"><div><h2 id="cr-h">${esc(r.name)}</h2>
       <p class="small muted">${esc(la)}: ${esc(r.sources.a.source)} · ${esc(lb)}: ${esc(r.sources.b.source)} · ${r.mode === "lengkap" ? "Mode lengkap" : "Mode cepat"}${r.stats.seconds != null ? ` · ${esc(fmtDur(r.stats.seconds))}` : ""}</p></div>
-      <div class="actions">${r.id ? `<a class="btn btn-primary" href="/api/compares/${encodeURIComponent(r.id)}/xlsx">Unduh Excel</a>` : ""}
-        ${saved ? `<a class="btn" href="#banding">Kembali</a>` : `<button type="button" class="btn" data-action="cmp-reset">Perbandingan baru</button>`}</div></div>
+      <div class="actions">${r.id ? `<a class="btn btn-primary" href="/api/compares/${encodeURIComponent(r.id)}/gabungan">Unduh Excel gabungan</a>
+        <a class="btn" href="/api/compares/${encodeURIComponent(r.id)}/xlsx">Unduh laporan perbandingan</a>` : ""}
+        ${saved ? `<a class="btn" href="#banding">Kembali</a>` : `<button type="button" class="btn" data-action="cmp-reset">Gabungan baru</button>`}</div></div>
+    <div class="stat-strip" style="border:0">
+      <div class="stat"><b>${num(m.total)}</b><span>test case gabungan (dari ${num(m.sebelum)})</span></div>
+      <div class="stat"><b>${num(m.sama)}</b><span>pasangan sama, dipakai dari ${esc(la)}</span></div>
+      <div class="stat${m.bertentangan ? " warn" : ""}"><b>${num(m.bertentangan)}</b><span>bertentangan</span></div>
+      <div class="stat${m.perlu_cek ? " warn" : ""}"><b>${num(m.perlu_cek)}</b><span>diberi tanda untuk dicek</span></div>
+    </div>
+    <p class="small">${esc((r.merge || {}).conclusion || "")}</p>
+    <p class="tiny muted">Isi test case tidak diubah. Kolom <b>Asal</b> dan <b>Catatan gabung</b> ditambahkan di file Excel supaya kamu tahu tiap baris berasal dari mana dan kenapa.</p>
+  </section>
+  <details class="fold card" aria-labelledby="cc-h"><summary>Rincian perbandingan: apa yang sama dan apa yang beda</summary>
+  <section style="padding-top:12px"><h2 id="cc-h">Kesimpulan</h2>
     <div class="stat-strip" style="border:0">
       <div class="stat"><b>${esc(pctTxt(s.a_coverage))}</b><span>${esc(la)} berpasangan (${num(s.a_paired)} dari ${num(s.a_total)})</span></div>
       <div class="stat"><b>${esc(pctTxt(s.b_coverage))}</b><span>${esc(lb)} berpasangan (${num(s.b_paired)} dari ${num(s.b_total)})</span></div>
-      <div class="stat${s.bertentangan ? " warn" : ""}"><b>${num(s.bertentangan)}</b><span>bertentangan</span></div>
-      <div class="stat${s.perlu_dicek ? " warn" : ""}"><b>${num(s.perlu_dicek)}</b><span>perlu dicek</span></div>
     </div>
-  </section>
-  <section class="card" aria-labelledby="cc-h"><h2 id="cc-h">Kesimpulan</h2>
     ${r.ai_summary ? `<p>${esc(r.ai_summary)} <span class="ftag tag-ai">AI</span></p>` : ""}
     ${(c.summary || []).map((l) => `<p class="small">${esc(l)}</p>`).join("")}
     <h3 class="rel-group">Rekomendasi</h3><ul class="rel-list">${(c.recommendations || []).map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
@@ -1858,7 +1876,7 @@ function cmpResultHtml(r, saved) {
     ${rows.length ? `<div class="table-wrap"><table class="cmp-table${["only_a", "only_b", "dup"].includes(tab) ? " two" : ""}"><thead>${head}</thead><tbody>${shown.join("")}</tbody></table></div>
       ${rows.length > limit ? `<button type="button" class="btn" data-action="cmp-more">Tampilkan ${num(Math.min(100, rows.length - limit))} lagi (dari ${num(rows.length)})</button>` : ""}`
       : `<p class="muted">Tidak ada data di bagian ini.</p>`}
-  </section>`;
+  </section></details>`;
 }
 const pctTxt = (v) => `${String(Math.round((v || 0) * 10) / 10).replace(".", ",")}%`;
 
@@ -1867,7 +1885,7 @@ async function viewBanding(arg) {
   if (arg) {
     const r = await api(`/api/compares/${encodeURIComponent(arg)}`);
     if (S.cmpView !== arg) { S.cmpView = arg; S.cmpTab = "pairs"; S.cmpQ = ""; S.cmpLimit = 100; }
-    app.innerHTML = `<header class="page-head"><div><h1>Bandingkan Test Case</h1></div></header>${cmpResultHtml(r, true)}`;
+    app.innerHTML = `<header class="page-head"><div><h1>Gabungkan Test Case</h1></div></header>${cmpResultHtml(r, true)}`;
     S.cmpShown = r;
     return;
   }
@@ -1879,14 +1897,14 @@ async function viewBanding(arg) {
   S.cmpShown = res;
   const locked = running;
   app.innerHTML = `
-  <header class="page-head"><div><h1>Bandingkan Test Case</h1>
-    <p class="muted">Bandingkan dua kumpulan test case, mis. hasil dari desain dengan hasil dari PRD, atau versi lama dengan versi baru. Kode memutuskan yang sudah jelas, kemiripan makna mempersempit sisanya, dan AI hanya menilai pasangan yang masih ragu. Test case sumber tidak diubah.</p></div></header>
-  ${d.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Perbandingan gagal.</strong> ${esc(d.error || "")}</span><button type="button" class="btn btn-small" data-action="cmp-reset">Tutup</button></div>` : ""}
+  <header class="page-head"><div><h1>Gabungkan Test Case</h1>
+    <p class="muted">Satukan dua kumpulan test case menjadi satu, mis. test case dari PRD asli dengan test case dari Desain Konversi ke PRD. TƎRᗩ mencari mana yang sama dan mana yang beda, lalu menggabungkannya: yang sama diambil satu (dari kumpulan A), yang cuma mirip disimpan dua-duanya dan diberi tanda, yang bertentangan ditandai supaya kamu putuskan sendiri. Test case sumber tidak diubah.</p></div></header>
+  ${d.status === "gagal" ? `<div class="banner error" role="alert"><span><strong>Penggabungan gagal.</strong> ${esc(d.error || "")}</span><button type="button" class="btn btn-small" data-action="cmp-reset">Tutup</button></div>` : ""}
   ${running ? `<div id="cmp-prog">${cmpProgressHtml(d)}</div>` : ""}
   ${res ? cmpResultHtml(res, false) : `
   ${sources.length ? "" : `<div class="banner" role="status"><span><strong>Belum ada hasil test case di Riwayat.</strong> Pilihan "Dari Riwayat" hanya berisi hasil <b>Generator Test Case PRD</b> yang sudah selesai (bukan hasil konversi PRD). Unggah file Excel/JSON test case, atau buat test case dulu.</span><a href="#mulai">Mulai buat test case</a></div>`}
   <div class="grid grid-2">${cmpSideHtml("a", st, sources, locked)}${cmpSideHtml("b", st, sources, locked)}</div>
-  <section class="card" aria-labelledby="cmp-opt-h"><h2 id="cmp-opt-h">Cara membandingkan</h2>
+  <section class="card" aria-labelledby="cmp-opt-h"><h2 id="cmp-opt-h">Cara menggabungkan</h2>
     <fieldset id="cmp-mode"><legend>Mode</legend><div class="src-pick">
       <label class="radio-card"><input type="radio" name="cmp-mode" value="lengkap" ${st.mode === "lengkap" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Lengkap</b><br><span class="tiny muted">Kode, kemiripan makna, lalu AI untuk yang ragu. Biasanya ±10–20 menit.</span></span></label>
       <label class="radio-card"><input type="radio" name="cmp-mode" value="cepat" ${st.mode === "cepat" ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>Cepat</b><br><span class="tiny muted">Tanpa AI chat, ±1 menit. Pasangan yang ragu masuk Perlu dicek.</span></span></label>
@@ -1895,13 +1913,13 @@ async function viewBanding(arg) {
       <li>${icon(d.embed ? "ok" : "warn")}<span><span style="font-weight:500">Kemiripan makna ${d.embed ? "tersedia" : "belum tersedia"}</span><br><span class="tiny muted">${d.embed ? `Model ${esc(d.embed_model)}` : `Model ${esc(d.embed_model)} belum ada, jadi lapis ini dilewati. ${(d.ai ? "" : "AI belum terhubung. ")}Jalankan Pasang_Tera.bat, atau: ollama pull ${esc(d.embed_model)}`}</span></span></li>
       <li>${icon(d.ai ? "ok" : "warn")}<span><span style="font-weight:500">AI ${d.ai ? "terhubung" : "belum terhubung"}</span><br><span class="tiny muted">${d.ai ? "Dipakai di mode Lengkap untuk pasangan yang ragu." : "Mode Lengkap butuh AI. Mode Cepat tetap bisa dipakai."}</span></span></li>
     </ul>
-    <label class="field" for="cmp-name">Nama perbandingan (opsional)
-      <input id="cmp-name" type="text" maxlength="80" data-cfield="name" value="${esc(st.name)}" placeholder="${esc(`${st.a.label} vs ${st.b.label}`)}" ${locked ? "disabled" : ""}></label>
-    <div class="actions"><button type="button" class="btn btn-primary" data-action="cmp-start" ${locked || st.a.uploading || st.b.uploading ? "disabled" : ""}>${running ? "Sedang membandingkan..." : "Bandingkan"}</button>
+    <label class="field" for="cmp-name">Nama gabungan (opsional)
+      <input id="cmp-name" type="text" maxlength="80" data-cfield="name" value="${esc(st.name)}" placeholder="${esc(`${st.a.label} + ${st.b.label}`)}" ${locked ? "disabled" : ""}></label>
+    <div class="actions"><button type="button" class="btn btn-primary" data-action="cmp-start" ${locked || st.a.uploading || st.b.uploading ? "disabled" : ""}>${running ? "Sedang menggabungkan..." : "Gabungkan"}</button>
       <span class="small muted">Hanya satu proses yang berjalan dalam satu waktu.</span></div>
   </section>`}
   ${running || (d.log || []).length ? `<section class="log" aria-labelledby="cmp-log"><h2 id="cmp-log">Progres</h2><ul class="log-lines" aria-live="polite">${logHtml(d.log) || "<li>Memulai...</li>"}</ul></section>` : ""}
-  ${past.length ? `<section class="card" aria-labelledby="cmp-past"><h2 id="cmp-past">Perbandingan sebelumnya</h2>
+  ${past.length ? `<section class="card" aria-labelledby="cmp-past"><h2 id="cmp-past">Gabungan sebelumnya</h2>
     <div class="table-wrap"><table><thead><tr><th>Nama</th><th>Waktu</th><th class="r">Berpasangan</th><th class="r">Bertentangan</th><th></th></tr></thead><tbody>
     ${past.map((p) => `<tr><td>${esc(p.name)}<br><span class="tiny muted">${esc((p.labels || {}).a)} vs ${esc((p.labels || {}).b)} · ${p.mode === "lengkap" ? "Lengkap" : "Cepat"}</span></td>
       <td class="nw small">${esc(fmtDate(p.time))}</td>
@@ -1965,7 +1983,7 @@ async function cmpStart() {
   const same = st.a.kind === st.b.kind && (st.a.kind === "run" ? st.a.id && st.a.id === st.b.id : st.a.token && st.a.token === st.b.token);
   if (same) errs.push([$("cmp-run-b") || $("cmp-src-b"), "A dan B memakai sumber yang sama. Pilih dua kumpulan test case yang berbeda."]);
   if (st.a.label.trim() && st.a.label.trim().toLowerCase() === st.b.label.trim().toLowerCase()) errs.push([$("cmp-label-b"), "Nama kumpulan A dan B harus berbeda."]);
-  if (st.name.trim()) errs.push([$("cmp-name"), V.name(st.name, "Nama perbandingan")]);
+  if (st.name.trim()) errs.push([$("cmp-name"), V.name(st.name, "Nama gabungan")]);
   if (!report(errs)) return;
   const side = (s) => ({ kind: s.kind, id: s.id, token: s.token, label: s.label.trim() });
   try {
@@ -2402,7 +2420,7 @@ app.addEventListener("click", (ev) => {
   else if (a === "cmp-more") { S.cmpLimit = (S.cmpLimit || 100) + 100; cmpRerenderTable(); }
   else if (a === "cmp-del") {
     if (el.dataset.confirm !== "1") { el.dataset.confirm = "1"; el.textContent = "Yakin hapus?"; el.classList.add("btn-danger-confirm"); setTimeout(() => { if (el.isConnected) { el.dataset.confirm = ""; el.textContent = "Hapus"; el.classList.remove("btn-danger-confirm"); } }, 4000); return; }
-    api(`/api/compares/${encodeURIComponent(el.dataset.cmp)}`, { method: "DELETE" }).then(() => { toast("Hasil perbandingan dihapus"); viewBanding(); }).catch((e) => toast(e.message, true));
+    api(`/api/compares/${encodeURIComponent(el.dataset.cmp)}`, { method: "DELETE" }).then(() => { toast("Hasil gabungan dihapus"); viewBanding(); }).catch((e) => toast(e.message, true));
   }
   else if (a === "md-view") mdRun(el.dataset.md, "view", el);
   else if (a === "md-download") mdRun(el.dataset.md, "download", el);

@@ -10,7 +10,7 @@ Yang bisa dilakukan:
 | **Desain Konversi ke PRD** | Gambar desain (export Figma atau screenshot) disusun menjadi PRD. |
 | **MD Konversi ke PDF** | File PRD `.md` diubah menjadi PDF rapi untuk dibagikan. Tanpa AI, hitungan detik. |
 | **Generator Test Case PRD** | Dari PRD, dibuatkan test case lengkap dalam Excel, lalu diperiksa AI kedua. |
-| **Bandingkan Test Case** | Dua kumpulan test case dibandingkan: mana yang berpasangan, mana yang cuma ada di satu sisi, mana yang hasil harapannya bertentangan. |
+| **Gabungkan Test Case** | Dua kumpulan test case disatukan menjadi satu: yang sama diambil satu, yang cuma mirip atau bertentangan diberi tanda. |
 
 Panduan ini untuk pemula: tidak perlu VS Code dan tidak perlu bisa coding. Ikuti langkahnya berurutan.
 
@@ -51,7 +51,7 @@ Yang dikerjakan otomatis (yang sudah ada akan dilewati):
 | Python | Dipasang kalau belum ada |
 | Ollama (mesin AI lokal) | Dipasang dan dinyalakan. Pilihan 2: diganti Tailscale |
 | Komponen TƎRᗩ | Folder `.venv` dan komponen dari `requirements.txt` |
-| Model AI | Pilihan 2: dilewati. Termasuk model kemiripan makna `nomic-embed-text` untuk Bandingkan Test Case |
+| Model AI | Pilihan 2: dilewati. Termasuk model kemiripan makna `nomic-embed-text` untuk Gabungkan Test Case |
 | Bahasa OCR | Bahasa Inggris untuk pembaca teks Windows (dipakai Desain Konversi ke PRD). Windows minta izin admin sekali |
 | Shortcut | Ikon **TERA** di Desktop |
 
@@ -153,20 +153,37 @@ PDF A4 lengkap dengan judul, daftar, tabel, kutipan, blok kode, dan nomor halama
 
 1. **Generator Test Case PRD** → **Mulai baru**.
 2. Pilih dokumen PRD dari dropdown, atau tambahkan dengan **Tambah dokumen PRD** (file `.md`).
-3. Pastikan kartu **Kesiapan** hijau semua, lalu **Mulai buat test case**.
-4. Pantau di **Sedang berjalan**. Laptop dijaga agar tidak tidur, tapi **jangan tutup layar laptop**.
-5. Setelah selesai: **Hasil** (ringkasan + **Unduh Excel**), **Perlu dicek** (test case yang ditandai AI untuk dicek manual), dan **Cakupan** (memastikan semua bagian PRD sudah ada test case-nya).
+3. Pilih **Jenis PRD**:
+   - **PRD lengkap (ditulis manusia)** — PRD biasa yang memuat aturan, batasan, dan hak akses.
+   - **PRD hasil konversi desain** — PRD yang dibuat lewat menu Desain Konversi ke PRD. Isinya hanya yang terlihat di layar, jadi AI dilarang menambah aturan yang tidak tertulis (validasi format, penguncian akun, hak akses) dan wajib memakai nama tombol serta kolom persis seperti di desain.
+4. Pastikan kartu **Kesiapan** hijau semua, lalu **Mulai buat test case**.
+5. Pantau di **Sedang berjalan**. Laptop dijaga agar tidak tidur, tapi **jangan tutup layar laptop**.
+6. Setelah selesai: **Hasil** (ringkasan + **Unduh Excel**), **Perlu dicek** (test case yang ditandai AI untuk dicek manual), dan **Cakupan** (memastikan semua bagian PRD sudah ada test case-nya).
 
-### E. Bandingkan test case
+### E. Gabungkan test case
 
-1. Menu **Bandingkan Test Case**.
-2. Untuk **Test case A** dan **B**: beri nama kumpulan (mis. `Dari desain` dan `Dari PRD`), lalu pilih sumbernya:
+Menyatukan dua kumpulan test case menjadi satu, misalnya test case dari PRD asli dengan test case dari Desain Konversi ke PRD.
+
+1. Menu **Gabungkan Test Case**.
+2. Untuk **Test case A** dan **B**: beri nama kumpulan (mis. `Dari PRD` dan `Dari desain`), lalu pilih sumbernya:
    - **Dari Riwayat**: hasil Generator Test Case PRD yang sudah selesai.
    - **Unggah file**: Excel (.xlsx) atau JSON, maks. 20 MB, termasuk test case buatan manual. TƎRᗩ mencari sendiri kolom judul, Test Data, Expected Result, dan lainnya.
-3. Pilih mode **Lengkap** (±10–20 menit, memakai AI untuk pasangan yang masih ragu) atau **Cepat** (±1 menit, tanpa AI; yang ragu masuk **Perlu dicek**).
-4. Klik **Bandingkan**. Hasilnya: persentase yang berpasangan, kesimpulan, serta tab **Berpasangan**, **Bertentangan**, **Perlu dicek**, **Hanya di A**, **Hanya di B**, dan **Kembar**. **Unduh Excel** untuk laporan lengkap.
+3. Pilih mode **Lengkap** (±10–20 menit, memakai AI untuk pasangan yang masih ragu) atau **Cepat** (±1 menit, tanpa AI; yang ragu ikut masuk dan diberi tanda).
+4. Klik **Gabungkan**, lalu **Unduh Excel gabungan**.
 
-Test case sumber tidak pernah diubah. Hasilnya bisa dibuka lagi di bagian **Perbandingan sebelumnya**.
+Aturan gabungnya:
+
+| Keadaan | Yang masuk ke hasil |
+|---|---|
+| Dinilai **sama** | Satu saja, diambil dari **kumpulan A**. Dicatat di kolom Catatan gabung bahwa B punya yang sama. |
+| Cuma **mirip** (fitur sama, aspek beda) atau salah satu mencakup sebagian | Dua-duanya masuk dan diberi tanda, biar kamu yang memutuskan. |
+| **Bertentangan** (skenario dan data sama, hasil harapan berbeda) | Dua-duanya masuk dan ditandai jelas — wajib diputuskan orang. |
+| Cuma ada di satu sisi | Masuk apa adanya. |
+| **Kembar** di dalam satu kumpulan | Satu saja yang masuk. |
+
+File hasilnya memakai template test case biasa, ditambah dua kolom: **Asal** (dari kumpulan mana) dan **Catatan gabung** (kenapa ditandai). Isi test case tidak pernah diubah. Laporan perbandingannya (Berpasangan, Hanya di A, Hanya di B, Bertentangan, Kembar) tetap ada di bagian **Rincian perbandingan** dan bisa diunduh terpisah.
+
+Test case sumber tidak pernah diubah. Hasilnya bisa dibuka lagi di bagian **Gabungan sebelumnya**.
 
 Semua proses dari setiap menu tercatat di menu **Riwayat** beserta hasilnya.
 
@@ -240,7 +257,7 @@ Fitur ini ada mulai versi 1.3.0. Kalau kamu masih memakai 1.2.0 ke bawah, minta 
 | Excel test case | `outputs\` |
 | Hasil konversi catatan (PRD, catatan review PDF, catatan asli) | `outputs\free_text_to_prd\` |
 | Hasil konversi desain (PRD, catatan review PDF, gambar asli, potongan layar) | `outputs\design_to_prd\` |
-| Hasil Bandingkan Test Case (laporan Excel dan datanya) | `outputs\tc_compare\` |
+| Hasil Gabungkan Test Case (Excel gabungan, laporan perbandingan, dan datanya) | `outputs\tc_compare\` |
 | Riwayat setiap proses pembuatan test case | `runs\` |
 | Riwayat MD ke PDF (PDF yang pernah dibuat) | `outputs\md_pdf\` |
 | Contoh test case perusahaan (acuan gaya penulisan AI) | `knowledge\company_testcases\` |
@@ -262,7 +279,7 @@ Fitur ini ada mulai versi 1.3.0. Kalau kamu masih memakai 1.2.0 ke bawah, minta 
 | `run.py`, `agents\`, `tc_workflows\` | Mesin Generator Test Case PRD |
 | `free_text_to_prd\` | Mesin Catatan Konversi ke PRD |
 | `design_to_prd\` | Mesin Desain Konversi ke PRD |
-| `tc_compare\` | Mesin Bandingkan Test Case |
+| `tc_compare\` | Mesin Gabungkan Test Case |
 | `tools\` | Bagian bersama: koneksi AI, pembaca PRD, pembuat PDF, aturan validasi |
 | `configs\ai.json` | Pengaturan AI (juga bisa diubah dari menu Pengaturan) |
 | `knowledge\` | Dokumen PRD, contoh test case perusahaan, daftar istilah terlarang |

@@ -555,9 +555,16 @@ def card_rules(card: str, screens: List[Dict[str, Any]], nav_seen: set, describe
                                                    or _LOGOUT_ACT.match(trig or "")) else ""
             data = [l.split(" ", 1)[1] for l in langkah if l.split(" ", 1)[0] in ("mengisi", "memilih", "mengatur")]
             if maksud:
-                # aturan bisnis: siapa boleh melakukan apa, datanya apa, akibatnya apa
+                # aturan bisnis: siapa boleh melakukan apa, datanya apa, akibatnya apa.
+                # Nama tombol aslinya tetap ditulis: itu yang dipakai QA sebagai langkah uji.
                 kalimat = f"Pengguna dapat {maksud}"
-                kalimat += (f" dengan mengisi {'; '.join(data)}" if data else f" dari {what}") + "."
+                if data:
+                    kalimat += f" dengan mengisi {'; '.join(data)}"
+                    kalimat += f", lalu {'menekan tombol' if trig_is_button else 'membuka'} {q(trig)}." if trig else "."
+                elif trig:
+                    kalimat += f" lewat {'tombol ' if trig_is_button else ''}{q(trig)} di {what}."
+                else:
+                    kalimat += f" dari {what}."
                 if hasil:
                     kalimat += f" Bila berhasil, {hasil}."
                 add(kalimat, (form_fields[0]["name"] if form_fields else trig) or name, src, "alur")

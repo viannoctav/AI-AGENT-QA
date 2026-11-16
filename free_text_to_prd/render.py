@@ -218,6 +218,11 @@ def render_markdown(doc: Dict[str, Any]) -> str:
             else:
                 L.append("Rules:")
             for r in items:
+                if r.get("jenis") == "alur" and r["pernyataan"].startswith("Alur ini melewati"):
+                    # urutan layar = konteks, bukan kebutuhan yang diuji: ditulis miring supaya tidak
+                    # ikut menjadi test case sendiri (generator hanya membaca butir berpoin)
+                    L += [f"*{_txt(r['pernyataan'])}*", ""]
+                    continue
                 k += 1
                 L.append(f"- {_txt(r['pernyataan'])}")
                 trace.append(f"- {rid} aturan {k}: {_quote(r['kutipan'])} (baris {r['baris']})")

@@ -74,6 +74,32 @@ def _field_from_rule(batch: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+# contoh nilai menurut jenis field, dipakai bila PRD tidak memuat contoh untuk field itu
+_CONTOH_TIPE = [
+    (r"e-?mail", "budi.santoso@example.com"), (r"phone|telepon|\bhp\b|nomor", "081234567890"),
+    (r"password|sandi", "Rahasia123"), (r"tanggal|date|waktu|time", "2026-01-31"),
+    (r"durasi|duration|kapasitas|capacity|jumlah|qty|harga|amount|total", "60"),
+    (r"nama|name", "Budi Santoso"),
+]
+
+
+def _td_example(field: Optional[str], hints: Optional[Dict[str, str]]) -> str:
+    """Contoh Test Data WAJIB memakai nilai sungguhan. Contoh berisi "<nilai>" ditiru mentah-mentah oleh
+    model kecil, sehingga kolom Test Data di Excel berisi placeholder, bukan data uji."""
+    def _n(x):
+        return re.sub(r"[^a-z0-9]+", "", str(x or "").lower())
+    pasangan = [(k, v) for k, v in (hints or {}).items() if str(v or "").strip()]
+    for k, v in pasangan:  # nilai dari PRD untuk field yang sama
+        if field and _n(k) == _n(field):
+            return f'"{k}: {v}"'
+    for pola, contoh in _CONTOH_TIPE:  # nilai menurut jenis field yang sedang ditulis
+        if field and re.search(pola, field, re.I):
+            return f'"{field}: {contoh}"'
+    if pasangan:
+        return f'"{pasangan[0][0]}: {pasangan[0][1]}"'
+    return f'"{field or "Email"}: nilai konkret yang diketik QA, mis. budi@example.com atau 12000"'
+
+
 def _prompt_examples(batch: List[Dict[str, Any]], hints: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """Contoh di instruksi dibangun dari obligation yang sedang ditulis (nama fitur/field/status dari PRD ini),
     supaya istilah dari PRD lain tidak terbawa ke test case."""
@@ -97,9 +123,9 @@ def _prompt_examples(batch: List[Dict[str, Any]], hints: Optional[Dict[str, str]
         "pre": f"Membuka aplikasi dan login dengan akun yang sesuai; berada di halaman yang memuat {feat}",
         "field": f'["Isi field {field} dengan nilai pada Test Data", "Isi field wajib lainnya dengan data valid", "Klik tombol Simpan"]',
         "wait": '["Lakukan aksi yang memulai batas waktu", "Tunggu sesuai durasi di Langkah wajib", "Lanjutkan aksi berikutnya", "Klik tombol pemicu"]',
-        "state": f'["Buka detail data berstatus {state or "<status awal>"}", "Klik tombol aksi yang mengubah status", "Klik Ya pada konfirmasi"]',
+        "state": f'["Buka detail data berstatus {state or "awal sesuai PRD"}", "Klik tombol aksi yang mengubah status", "Klik Ya pada konfirmasi"]',
         "dt": '["Pilih/isi setiap kondisi sesuai Test Data", "Klik tombol pemicu proses"]',
-        "td": f'"{field}: <nilai>"',
+        "td": _td_example(field, hints),
     }
 
 
@@ -108,22 +134,29 @@ def build_prompt(batch: List[Dict[str, Any]], hints: Dict[str, str], feedback: D
     ex = _prompt_examples(batch, hints)
     blocks = "\n\n".join(_format_ob(ob, feedback.get(ob["ob_id"])) for ob in batch)
     style_txt = _style_examples(batch)
+    dari_desain = str(llm.settings().get("prd_kind") or "") == "desain"
+    # PRD hasil konversi desain hanya memuat yang terlihat di layar: penulis test case tidak boleh menambahi
+    catatan_prd = ("\nPRD ini disusun otomatis dari gambar desain, jadi hanya memuat yang terlihat di layar. "
+                   "JANGAN menambah aturan yang tidak tertulis (validasi format, penguncian akun, batas waktu "
+                   "sesi, hak akses). Nama tombol, kolom, dan layar yang ada di dalam tanda kutip pada Aturan PRD "
+                   "WAJIB dipakai apa adanya di steps, jangan diterjemahkan atau diganti.\n" if dari_desain else "")
     return f"""Tulis SATU test case untuk SETIAP obligation di bawah (jumlah test case = {len(batch)}).
+{catatan_prd}
 
 ATURAN WAJIB:
 1. Kembalikan ob_id persis sama. Jangan menambah/menghapus obligation.
-2. title: diawali "Verifikasi", maksimal 120 karakter, Bahasa Indonesia (terjemahkan aturan berbahasa Inggris, jangan menyalin kalimatnya), idealnya <= 80 karakter, menyebut objek/fitur spesifik dari PRD. Hanya memakai angka yang ada di Skenario. Jangan tulis ID requirement, nomor telepon, email, atau kode di judul.
+2. title: diawali "Verifikasi", berbentuk "Verifikasi <fitur/aksi yang diuji> dengan <kondisi atau data yang dipakai>", DILARANG memakai kata "alur" atau "flow", maksimal 120 karakter, Bahasa Indonesia (terjemahkan aturan berbahasa Inggris, jangan menyalin kalimatnya), idealnya <= 80 karakter, menyebut objek/fitur spesifik dari PRD. Hanya memakai angka yang ada di Skenario. Jangan tulis ID requirement, nomor telepon, email, atau kode di judul.
 3. preconditions = PERSIAPAN yang dilakukan SEBELUM steps dan biasanya sama untuk banyak test case: membuka aplikasi/URL, login dengan akun yang sesuai (JANGAN login untuk test case login/registrasi), menuju halaman fitur, dan keadaan akun/data yang dibutuhkan. Contoh: "{ex['pre']}". JANGAN memuat nilai uji (email/password/kode/nomor yang diuji) dan JANGAN bertentangan dengan tujuan test case. DILARANG frasa generik seperti "kondisi awal sistem sesuai skenario".
 4. steps = 2-8 langkah uji (array string) yang dilakukan QA SETELAH preconditions, HANYA AKSI berupa kalimat perintah (isi, pilih, klik, tunggu, masukkan). DILARANG langkah verifikasi seperti "Pastikan...", "Verifikasi...", "Periksa...", "Amati..." (hasil hanya ditulis di expected_result), dan jangan mengulang preconditions. Langkah terakhir adalah aksi yang memicu hasil. Nama tombol/halaman boleh disimpulkan secara wajar bila PRD tidak menyebutnya. Jika ada "Langkah wajib", isinya (termasuk angka) harus tertulis di steps. Contoh:
    - field input: {ex['field']}
    - batas waktu: {ex['wait']}
    - perubahan status: {ex['state']}
    - decision table: {ex['dt']}
-5. test_data = HANYA nilai yang diinput atau dipilih QA (teks, angka, tanggal, email, pilihan dropdown, file yang diunggah), satu per baris "Nama field: nilai", dengan nama field persis seperti di PRD dan TIDAK diterjemahkan (mis. {ex['td']}), bukan label umum seperti "Nilai input". Nilai yang diketik/dipilih di steps (mis. 0, 'abc') WAJIB juga ditulis di test_data. Waktu tunggu, jumlah percobaan, urutan aksi, dan keadaan akun BUKAN test data (masukkan ke steps/preconditions). Jika sudah ada "Nilai uji", isi test_data dengan "" (nilainya dipakai otomatis). Jika memang tidak ada yang diinput, isi "-".
+5. test_data = HANYA nilai yang diinput atau dipilih QA (teks, angka, tanggal, email, pilihan dropdown, file yang diunggah), satu per baris "Nama field: nilai", dengan nama field persis seperti di PRD dan TIDAK diterjemahkan (mis. {ex['td']}), bukan label umum seperti "Nilai input". DILARANG menulis isian pengganti (teks di dalam tanda kurung siku), frasa umum seperti "sesuai skenario", atau nama fitur/modul sebagai nama field; tulis nilai konkret yang benar-benar diketik atau dipilih QA. Nilai yang diketik/dipilih di steps (mis. 0, 'abc') WAJIB juga ditulis di test_data. Waktu tunggu, jumlah percobaan, urutan aksi, dan keadaan akun BUKAN test data (masukkan ke steps/preconditions). Jika sudah ada "Nilai uji", isi test_data dengan "" (nilainya dipakai otomatis). Jika memang tidak ada yang diinput, isi "-".
 6. expected_result: kalimat pertama diawali TEPAT "Berhasil" (polaritas Positive) atau "Gagal"/"Ditolak" (polaritas Negative). Untuk polaritas Auto, pilih berdasarkan Aturan PRD. Jangan mengarang pesan error; kutip pesan hanya jika ada di aturan.
 7. Jangan memakai angka/ambang yang tidak ada di Skenario, Langkah wajib, atau Aturan PRD.
 8. expected_result: hasil konkret yang bisa diamati (halaman tujuan, pesan/penolakan, perubahan state, data tersimpan/tidak). Untuk decision table sebutkan status akhir yang terlihat (status/nilai yang tertulis di PRD). DILARANG frasa "sesuai deskripsi/aturan/requirement/ketentuan", "konsisten dengan kondisi awal", "alur berhasil", atau hanya "Berhasil."/"Gagal.".
-9. Untuk penolakan, sebutkan APA yang terjadi dan ALASANNYA (mis. "Gagal. Sistem menolak <data> karena <alasan sesuai aturan PRD> dan tetap di halaman yang sama"). Jika PRD tidak menyebut teks pesan, cukup tulis "menampilkan pesan kesalahan" disertai alasan.
+9. Untuk penolakan, sebutkan APA yang terjadi dan ALASANNYA (mis. "Gagal. Sistem menolak email tanpa tanda @ karena format email tidak valid dan tetap di halaman yang sama"). Jika PRD tidak menyebut teks pesan, cukup tulis "menampilkan pesan kesalahan" disertai alasan.
 10. expected_result tidak boleh bertentangan: jika diawali "Berhasil" jangan memuat penolakan/gagal, dan sebaliknya.
 
 CONTOH DATA SINTETIS dari PRD:

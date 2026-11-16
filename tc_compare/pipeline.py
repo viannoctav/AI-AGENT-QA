@@ -1,4 +1,5 @@
-"""Orkestrator Bandingkan test case: urutan lapis dari yang paling murah (kode) ke yang paling mahal (AI chat)."""
+"""Orkestrator Gabungkan test case: urutan lapis dari yang paling murah (kode) ke yang paling mahal (AI chat),
+lalu kedua kumpulan digabung menjadi satu (lihat tc_compare/merge.py)."""
 import json
 import re
 import shutil
@@ -142,7 +143,10 @@ def run(a: Dict[str, Any], b: Dict[str, Any], mode: str = "lengkap", name: str =
     # ringkasan per test case
     P["phase"] = "simpulkan"
     result = summarize(A, B, la, lb, pairs, scorer, cfg)
-    result.update(name=name or f"{la} vs {lb}", mode=mode, semantic=semantic, notes=notes,
+    from tc_compare import merge as MG  # gabungan dipakai menu Gabungkan Test Case
+    result["merge"] = MG.merge(pairs, result["duplicates"], A, B, la, lb)
+    result["merge"]["conclusion"] = MG.conclusion(result["merge"]["stats"], la, lb)
+    result.update(name=name or f"{la} + {lb}", mode=mode, semantic=semantic, notes=notes,
                   sources={"a": {"label": la, "source": a.get("source", ""), "count": len(A), "missing": a.get("missing", [])},
                            "b": {"label": lb, "source": b.get("source", ""), "count": len(B), "missing": b.get("missing", [])}},
                   stats={**result["stats"], "decided_by_code": decided_by_code, "judged_by_ai": len(to_judge) if mode == "lengkap" else 0,
@@ -286,12 +290,18 @@ def _save(result, a, b, out_base: Path) -> Dict[str, Any]:
         from tc_compare.report import write_excel
         xlsx = d / f"{_slug(result['name'])}_perbandingan.xlsx"
         write_excel(result, xlsx)
+        from tc_compare.merge import write_excel as write_merge
+        mg = result.get("merge") or {}
+        gabung = d / f"{_slug(result['name'])}_gabungan.xlsx"
+        write_merge(mg.get("rows") or [], mg.get("stats") or {},
+                    (result["labels"]["a"], result["labels"]["b"]), result["name"], gabung)
         (d / "hasil.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         snap = {"a": [_public(t) for t in a["tcs"]], "b": [_public(t) for t in b["tcs"]]}
         (d / "sumber.json").write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
         meta = {"kind": "perbandingan", "name": result["name"], "time": time.time(), "mode": result["mode"],
                 "labels": result["labels"], "sources": result["sources"], "stats": result["stats"],
-                "xlsx_file": xlsx.name, "semantic": result["semantic"]}
+                "xlsx_file": xlsx.name, "merge_file": gabung.name, "semantic": result["semantic"],
+                "merge_stats": (result.get("merge") or {}).get("stats", {})}
         try:
             from tools import llm
             meta["model"] = llm.generation_model() if result["mode"] == "lengkap" else None
@@ -301,4 +311,4 @@ def _save(result, a, b, out_base: Path) -> Dict[str, Any]:
     except Exception:
         shutil.rmtree(d, ignore_errors=True)
         raise
-    return {"id": d.name, "xlsx_file": xlsx.name}
+    return {"id": d.name, "xlsx_file": xlsx.name, "merge_file": gabung.name}

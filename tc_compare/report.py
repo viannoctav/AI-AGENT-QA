@@ -1,4 +1,4 @@
-"""Laporan Excel hasil Bandingkan test case."""
+"""Laporan Excel rincian perbandingan (pendamping Excel gabungan)."""
 import re
 from typing import Any, Dict, List
 

@@ -179,6 +179,8 @@ def _is_transition_line(line: str) -> bool:
 
 _SUBHEAD = re.compile(r"^\*\*(.+?)\*\*\s*$")
 _AC_LABEL = re.compile(r"^[*_\s]*acceptance criteria[*_\s:]*$", re.IGNORECASE)
+# baris miring utuh (*...*) = catatan konteks, mis. urutan layar pada PRD dari desain: bukan kebutuhan yang diuji
+_NOTE_LINE = re.compile(r"^\*[^*].*[^*]\*$")
 
 
 def _parse_item_body(lines: List[str]) -> Dict[str, Any]:
@@ -201,6 +203,9 @@ def _parse_item_body(lines: List[str]) -> Dict[str, Any]:
             continue
         if _is_transition_line(s) or re.fullmatch(r"\s*`[A-Z][A-Z0-9_]{2,}`\s*", s):
             transition_lines.append(s)
+            continue
+        if _NOTE_LINE.match(s.strip()):
+            last_bullet = False
             continue
         if _AC_LABEL.match(s.strip()):
             in_ac, last_bullet = True, False
